@@ -15,12 +15,15 @@ from arq.worker import Retry
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 
+import core.subscribers  # noqa: F401  (register core subscribers in the worker process)
 from app.config import get_settings
 from app.db import create_engine, create_session_factory
 from app.logging_setup import configure_logging
 from app.observability import init_sentry
 from shared import TEMPLATE_VERSION
+from shared.context import TenantContext
 from shared.events import EventEnvelope, bus
+from shared.handler_runtime import HandlerRuntime, reset_handler_runtime, set_handler_runtime
 from shared.processed_events import ProcessedEvent
 from shared.service import SqlAlchemyUnitOfWork
 
@@ -37,8 +40,21 @@ async def dispatch_event(ctx: dict[str, Any], handler_id: str, wire: dict[str, A
     subscription = ctx["bus"].resolve(handler_id)
     job_try = int(ctx.get("job_try") or 1)
 
+    # Reconstruct the tenant context from the envelope so the handler's writes
+    # pass RLS in the right tenant (§2.3). Core sinks that write system rows
+    # (audit) run under app_maintenance; everything else as app_user.
+    handler_ctx = TenantContext(
+        tenant_id=envelope.tenant_id,
+        actor=envelope.actor,
+        request_id=None,
+        locale="ru",
+    )
+    session_factory = (
+        ctx["maintenance_sessions"] if subscription.maintenance else ctx["session_factory"]
+    )
+
     try:
-        uow = SqlAlchemyUnitOfWork(ctx["session_factory"])
+        uow = SqlAlchemyUnitOfWork(session_factory, context=handler_ctx)
         async with uow:
             dedup_insert = (
                 pg_insert(ProcessedEvent)
@@ -54,7 +70,13 @@ async def dispatch_event(ctx: dict[str, Any], handler_id: str, wire: dict[str, A
                     handler=handler_id,
                 )
                 return
-            await subscription.handler(envelope)
+            # Expose the dispatcher's unit of work so the handler writes in this
+            # same transaction (effectively-once) and can emit further events.
+            token = set_handler_runtime(HandlerRuntime(uow=uow, ctx=handler_ctx, bus=ctx["bus"]))
+            try:
+                await subscription.handler(envelope)
+            finally:
+                reset_handler_runtime(token)
     except Exception:
         if job_try >= MAX_TRIES:
             logger.exception(
@@ -82,9 +104,12 @@ async def on_startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     init_sentry(settings)
-    engine = create_engine(settings)
-    ctx["engine"] = engine
-    ctx["session_factory"] = create_session_factory(engine)
+    user_engine = create_engine(settings.database_url)
+    maintenance_engine = create_engine(settings.database_maintenance_url)
+    ctx["user_engine"] = user_engine
+    ctx["maintenance_engine"] = maintenance_engine
+    ctx["session_factory"] = create_session_factory(user_engine)
+    ctx["maintenance_sessions"] = create_session_factory(maintenance_engine)
     ctx["bus"] = bus
 
     async def enqueue_reliable(handler_id: str, wire: dict[str, Any]) -> None:
@@ -97,7 +122,8 @@ async def on_startup(ctx: dict[str, Any]) -> None:
 
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:
-    await ctx["engine"].dispose()
+    await ctx["user_engine"].dispose()
+    await ctx["maintenance_engine"].dispose()
 
 
 class WorkerSettings:

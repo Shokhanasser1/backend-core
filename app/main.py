@@ -11,14 +11,21 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import core.subscribers  # noqa: F401  (register core event subscribers on the bus)
 from app.config import Settings, get_settings
-from app.db import create_engine, create_session_factory
+from app.db import Database
 from app.logging_setup import configure_logging
 from app.middleware import MetricsMiddleware, RequestIDMiddleware, SecurityHeadersMiddleware
 from app.observability import init_sentry
 from app.redis_client import create_redis
 from app.routes import router as infra_router
 from app.startup_checks import validate_route_permissions
+from core.auth.access_service import register_permissions
+from core.auth.router import router as auth_router
+from core.auth.security.encryption import SecretCipher
+from core.tenants.permissions import TENANTS_PERMISSIONS
+from core.tenants.router import router as tenants_router
+from core.tenants.sync import sync_system_roles
 from shared import TEMPLATE_VERSION
 from shared.errors import DomainError
 from shared.events import bus
@@ -30,14 +37,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     configure_logging(app_settings.log_level)
 
+    # Declare the permission catalog before the route validator runs.
+    register_permissions("tenants", TENANTS_PERMISSIONS)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Fail fast, before any external connection is made.
         validate_route_permissions(app)
 
         sentry_enabled = init_sentry(app_settings)
-        engine = create_engine(app_settings)
-        session_factory = create_session_factory(engine)
+        database = Database(app_settings)
         redis = create_redis(app_settings)
         arq_pool = await create_pool(RedisSettings.from_dsn(app_settings.redis_url))
 
@@ -47,10 +56,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         bus.bind_enqueue(enqueue_reliable)
 
         app.state.settings = app_settings
-        app.state.engine = engine
-        app.state.session_factory = session_factory
+        app.state.db = database
+        app.state.engine = database.user_engine  # readiness probe target
+        app.state.session_factory = database.user_sessions
         app.state.redis = redis
         app.state.arq_pool = arq_pool
+        app.state.bus = bus
+        app.state.cipher = SecretCipher(app_settings.secret_encryption_key_list)
+
+        # Idempotently reconcile system roles + grants (as app_maintenance).
+        async with database.maintenance_sessions() as session:
+            await sync_system_roles(session)
 
         logger.info(
             "application_started",
@@ -64,7 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await arq_pool.aclose()
             await redis.aclose()
-            await engine.dispose()
+            await database.dispose()
 
     application = FastAPI(
         title=app_settings.app_name,
@@ -72,6 +88,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     application.include_router(infra_router)
+    application.include_router(auth_router)
+    application.include_router(tenants_router)
 
     @application.exception_handler(DomainError)
     async def handle_domain_error(_request: Request, exc: DomainError) -> JSONResponse:

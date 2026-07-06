@@ -108,6 +108,10 @@ class Subscription:
     handler: EventHandler
     reliable: bool
     handler_id: str
+    # Reliable core sinks that legitimately write system rows (tenant_id NULL)
+    # run under app_maintenance; ordinary handlers run as app_user in the
+    # envelope's tenant context (schema §3.4). v1: only the audit sink.
+    maintenance: bool = False
 
 
 class EventBus:
@@ -125,24 +129,30 @@ class EventBus:
         self._enqueue = enqueue
 
     def subscribe(
-        self, pattern: str, *, reliable: bool = False
+        self, pattern: str, *, reliable: bool = False, maintenance: bool = False
     ) -> Callable[[EventHandler], EventHandler]:
         validate_pattern(pattern)
+        if maintenance and not reliable:
+            raise ValueError("maintenance handlers must be reliable")
 
         def decorator(handler: EventHandler) -> EventHandler:
-            if _is_wildcard(pattern):
+            if _is_wildcard(pattern) or maintenance:
                 top_package = handler.__module__.split(".")[0]
                 if top_package != WILDCARD_ALLOWED_TOP_PACKAGE:
                     raise RuntimeError(
-                        f"wildcard subscription {pattern!r} is a privilege of core modules; "
-                        f"feature handlers must subscribe to explicit event names "
-                        f"from their listens_events (handler: {handler.__module__})"
+                        f"wildcard/maintenance subscription {pattern!r} is a privilege of "
+                        f"core modules; feature handlers subscribe to explicit event names "
+                        f"as app_user (handler: {handler.__module__})"
                     )
             handler_id = f"{handler.__module__}.{handler.__qualname__}"
             if handler_id in self._by_id:
                 raise RuntimeError(f"duplicate event handler registration: {handler_id}")
             subscription = Subscription(
-                pattern=pattern, handler=handler, reliable=reliable, handler_id=handler_id
+                pattern=pattern,
+                handler=handler,
+                reliable=reliable,
+                handler_id=handler_id,
+                maintenance=maintenance,
             )
             self._subscriptions.append(subscription)
             self._by_id[handler_id] = subscription

@@ -39,7 +39,7 @@ jobs:
       - name: Тесты с покрытием (testcontainers: Postgres 16 + Redis 7)
         run: >
           uv run pytest
-          --cov=app --cov=shared
+          --cov=app --cov=core --cov=shared
           --cov-report=term-missing
           --cov-fail-under=85
 

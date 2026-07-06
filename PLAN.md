@@ -21,7 +21,7 @@ crm, saas и другие — см. бэклог.
 |---|------|-----------|------------------|--------|
 | 0 | План и схема | Схема БД ядра; карта интерфейсов и событий; threat model; стратегия обновления шаблона; открытые вопросы | Пользователь утвердил схему | ✅ |
 | 1 | Скелет | Структура, Docker Compose, Makefile, uv, конфиг, JSON-логи, health, шина событий, CI со сканами, pre-commit, Sentry, /metrics, ADR №1–6 | `make dev` поднимается; `make test` и CI зелёные | 🟨 |
-| 2 | Auth + Tenants | Регистрация, JWT+refresh, 2FA, RBAC, организации, приглашения; обязательные права на роутах | Интеграционные тесты всех сценариев, включая негативные | ⬜ |
+| 2 | Auth + Tenants | Регистрация, JWT+refresh, 2FA, RBAC, организации, приглашения; обязательные права на роутах | Интеграционные тесты всех сценариев, включая негативные | 🟨 |
 | 3 | Billing + Notifications + i18n | PaymentProvider (Payme, Click), вебхуки с подписью и идемпотентностью; NotificationChannel (Telegram, Eskiz, email) через очередь; каталоги ru/uz | Негативные тесты вебхуков; уведомления уходят из очереди | ⬜ |
 | 4 | Audit + Admin-каркас | Append-only аудит; admin-API с механизмом регистрации экранов модулей | Стандарты фазы + тесты | ⬜ |
 | 5 | CLAUDE.md + документация | Расширить CLAUDE.md конвенциями; README модулей ядра; ADR | Новая сессия Claude работает без этой переписки | ⬜ |
@@ -50,6 +50,36 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-06 — Фаза 2 построена (ждёт приёмки владельцем): полный цикл
+  auth+tenants сверх фундамента. Добавлены минимальный аудит (append-only +
+  wildcard-сток), RBAC (реестр прав, системные роли owner/admin/member с
+  синком на старте, механика require_permission с обязательной валидацией),
+  AuthService (регистрация, вход, 2FA TOTP+recovery, refresh с ротацией и
+  детектом reuse, сброс/смена пароля, logout, tenant-токен по ОВ-03),
+  TenantService (организации, приглашения, участники, инвариант последнего
+  owner), роутеры /api/auth и /api/tenants. ADR-0010 (JWT HS256 + план
+  миграции). Проверки: 130 тестов зелёные (сквозные HTTP-потоки + негативные
+  V2/V3/V7 + RLS + миграции 4 веток), покрытие 85%, lint/mypy strict/
+  import-linter чисто. Осталось для приёмки: самопроверка фазы + подтверждение
+  владельца; затем тег и коммит.
+- 2026-07-06 — Фаза 2 (фундамент): решены ОВ-11…ОВ-19, ОВ-26, ОВ-27 (все —
+  рекомендации). Построен и протестирован фундамент auth/tenants:
+  (1) разделение ролей БД (app_migrator/app_user/app_maintenance/
+  app_retention), init-скрипт compose + рендер для тестов, транзакционно-
+  локальный RLS-контекст (SET LOCAL), хелперы enable_tenant_rls, базовая
+  миграция shared0002 (функции app_current_*, проверка ролей);
+  (2) таблицы auth (ветка core_auth: users/user_totp/user_recovery_codes/
+  refresh_tokens, глобальные) и tenants (ветка core_tenants: tenants/
+  memberships/roles/role_permissions/invitations с полными RLS-политиками
+  §3.3); (3) примитивы безопасности: argon2id, JWT HS256 со строгим alg
+  (anti-confusion), opaque refresh/reset/challenge токены, TOTP+recovery,
+  Fernet/MultiFernet шифрование, Redis rate limiter/lockout/anti-replay/
+  ephemeral-store. Конфиг перенесён в shared/config.py (слой core→shared).
+  Тесты: RLS fail-closed/cross-tenant/pool-leak/WITH-CHECK, миграции трёх
+  веток (upgrade heads + downgrade), примитивы безопасности — зелёные.
+  Осталось: минимальный аудит (ОВ-26), RBAC-механика require_permission +
+  синк системных ролей, AuthService+TenantService+роутеры, сквозные
+  интеграционные тесты (все сценарии + негативные), затем самопроверка фазы.
 - 2026-07-06 — Фаза 0 утверждена владельцем: решены ОВ-01…ОВ-10 и ОВ-30
   (все — вариант «а»; ОВ-02 — жёсткое удаление, позиция схемы). Решения
   внесены в реестр, исходные документы и мастер-промпт. Блок 1 закрыт.

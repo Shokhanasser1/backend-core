@@ -1,6 +1,6 @@
 [project]
 name = "backend-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Переиспользуемый шаблон-конструктор бэкенда: ядро → модули → фичи (рынок УЗ/СНГ)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,6 +18,10 @@ dependencies = [
     "sentry-sdk>=2.19",
     "prometheus-client>=0.21",
     "uuid-utils>=0.10",
+    "argon2-cffi>=23.1",
+    "pyjwt>=2.10",
+    "pyotp>=2.9",
+    "cryptography>=44.0",
 ]
 
 [dependency-groups]
@@ -57,6 +61,16 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S311", "S608"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom requires these calls in argument defaults.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Header",
+    "fastapi.Body",
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -86,15 +100,22 @@ show_missing = true
 exclude_dirs = ["tests", ".venv"]
 
 [tool.importlinter]
-root_packages = ["app", "shared"]
+root_packages = ["app", "core", "shared"]
 
 [[tool.importlinter.contracts]]
-name = "Слои: app зависит от shared, не наоборот"
+name = "Слои: app -> core -> shared, только вниз"
 type = "layers"
-layers = ["app", "shared"]
+layers = ["app", "core", "shared"]
 
 [[tool.importlinter.contracts]]
-name = "SystemRepository — только для core/ (app запрещён)"
+name = "core не импортирует app"
+type = "forbidden"
+source_modules = ["core"]
+forbidden_modules = ["app"]
+
+[[tool.importlinter.contracts]]
+name = "SystemRepository — только для core/ (app напрямую не тянет)"
 type = "forbidden"
 source_modules = ["app"]
 forbidden_modules = ["shared.system_repository"]
+allow_indirect_imports = "true"

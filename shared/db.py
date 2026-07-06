@@ -8,9 +8,11 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, MetaData, Uuid, func
+from sqlalchemy import DateTime, MetaData, Uuid, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from shared.context import TenantContext
 from shared.ids import new_uuid7
 
 NAMING_CONVENTION = {
@@ -61,3 +63,22 @@ class TenantScopedBase(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_uuid7)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+
+
+async def apply_tenant_context(session: AsyncSession, ctx: TenantContext) -> None:
+    """Issue ``SET LOCAL`` app.tenant_id / app.user_id for the current
+    transaction (schema §3.2). Empty string for an absent id → NULLIF → NULL in
+    the RLS helper → fail closed (zero rows), never all rows and never an error.
+
+    Executing set_config starts the transaction, so this must run before any
+    business query in the unit of work. The GUC names are the project's RLS
+    convention, hence a shared concern.
+    """
+    tenant_value = str(ctx.tenant_id) if ctx.tenant_id is not None else ""
+    user_value = ctx.actor.id if ctx.actor.kind == "user" and ctx.actor.id else ""
+    await session.execute(
+        text("SELECT set_config('app.tenant_id', :value, true)"), {"value": tenant_value}
+    )
+    await session.execute(
+        text("SELECT set_config('app.user_id', :value, true)"), {"value": user_value}
+    )

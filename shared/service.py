@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from shared.context import TenantContext
+from shared.db import apply_tenant_context
 from shared.events import EventBus, EventEnvelope, validate_event_name
 from shared.ids import new_uuid7
 
@@ -47,12 +48,20 @@ class SqlAlchemyUnitOfWork:
 
     session: AsyncSession
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        context: TenantContext | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._context = context
         self._callbacks: list[CommitCallback] = []
 
     async def __aenter__(self) -> Self:
         self.session = self._session_factory()
+        if self._context is not None:
+            # Set the transaction-local RLS context before any business query.
+            await apply_tenant_context(self.session, self._context)
         return self
 
     async def __aexit__(

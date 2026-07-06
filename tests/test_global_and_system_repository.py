@@ -33,7 +33,9 @@ async def session(
         await sess.rollback()
 
 
-async def test_global_repository_crud(session: AsyncSession) -> None:
+async def test_global_repository_read_write(session: AsyncSession) -> None:
+    """processed_events is a global service table; app_user has SELECT/INSERT
+    only (schema §2.7), which is exactly what the dispatcher needs."""
     repo = ProcessedEventGlobalRepository(session)
     event_id = new_uuid7()
     row = await repo.add(ProcessedEvent(handler="core.audit.sink", event_id=event_id))
@@ -49,8 +51,17 @@ async def test_global_repository_crud(session: AsyncSession) -> None:
     with pytest.raises(NotFoundError):
         await repo.get_or_raise(("ghost", new_uuid7()))
 
+
+async def test_app_user_cannot_delete_processed_events(session: AsyncSession) -> None:
+    """DELETE on processed_events is reserved for app_maintenance (§2.7); the
+    grant denies it to app_user."""
+    from sqlalchemy.exc import ProgrammingError
+
+    repo = ProcessedEventGlobalRepository(session)
+    row = await repo.add(ProcessedEvent(handler="core.audit.sink", event_id=new_uuid7()))
     await repo.delete(row)
-    assert await repo.count() == 0
+    with pytest.raises(ProgrammingError, match="permission denied"):
+        await session.flush()
 
 
 async def test_global_repository_rejects_tenant_scoped_model(session: AsyncSession) -> None:

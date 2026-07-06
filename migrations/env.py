@@ -7,7 +7,10 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-import shared.processed_events  # noqa: F401  (register models on the metadata)
+import core.audit.models
+import core.auth.models
+import core.tenants.models  # noqa: F401  (register tenants models on the metadata)
+import shared.processed_events  # noqa: F401  (register service tables on the metadata)
 from app.config import Settings
 from shared.db import Base
 
@@ -16,9 +19,10 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    # A fresh Settings() (not the cached get_settings) so DATABASE_URL set by
-    # tooling/tests right before invocation is always respected.
-    return Settings().database_url
+    # Migrations connect as app_migrator (owner), never as the runtime app_user
+    # (schema §3.1). A fresh Settings() (not the cached get_settings) so a URL
+    # set by tooling/tests right before invocation is always respected.
+    return Settings().database_migrator_url
 
 
 def run_migrations_offline() -> None:

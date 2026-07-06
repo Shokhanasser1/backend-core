@@ -12,6 +12,8 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Провижининг ролей БД при первом старте (схема §3.1); read-only.
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U backend -d backend_core"]
       interval: 5s
@@ -31,7 +33,10 @@ services:
   api:
     build: .
     environment:
-      DATABASE_URL: postgresql+asyncpg://backend:backend@db:5432/backend_core
+      # Рантайм — app_user (RLS применяется); миграции — app_migrator (владелец).
+      DATABASE_URL: postgresql+asyncpg://app_user:app_user@db:5432/backend_core
+      DATABASE_MIGRATOR_URL: postgresql+asyncpg://app_migrator:app_migrator@db:5432/backend_core
+      DATABASE_MAINTENANCE_URL: postgresql+asyncpg://app_maintenance:app_maintenance@db:5432/backend_core
       REDIS_URL: redis://redis:6379/0
     env_file:
       - path: .env
@@ -48,7 +53,8 @@ services:
   worker:
     build: .
     environment:
-      DATABASE_URL: postgresql+asyncpg://backend:backend@db:5432/backend_core
+      DATABASE_URL: postgresql+asyncpg://app_user:app_user@db:5432/backend_core
+      DATABASE_MAINTENANCE_URL: postgresql+asyncpg://app_maintenance:app_maintenance@db:5432/backend_core
       REDIS_URL: redis://redis:6379/0
     env_file:
       - path: .env
