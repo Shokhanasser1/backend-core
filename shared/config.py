@@ -61,6 +61,40 @@ class Settings(BaseSettings):
     # audit_log retention (OV-27): 24 months default, env-overridable.
     audit_retention_days: int = Field(default=730)
 
+    # --- billing (Phase 3) ---
+    # Enabled payment providers, comma-separated (e.g. "payme,click").
+    enabled_payment_providers: str = ""
+    payment_checkout_ttl_seconds: int = 3600  # abandoned checkout -> expired
+    # Auto free/trial subscription on tenant creation (OV-21).
+    billing_auto_subscribe: bool = True
+    billing_default_plan_code: str = "free"
+    # Payme merchant credentials (env; empty = adapter unconfigured).
+    payme_merchant_id: str = ""
+    payme_merchant_key: str = ""
+    # Click credentials.
+    click_service_id: str = ""
+    click_merchant_id: str = ""
+    click_secret_key: str = ""
+
+    # --- notifications (Phase 3) ---
+    sms_daily_cap_per_tenant: int = 200  # anti-abuse (OV-25); 0 = unlimited
+    notification_retention_days: int = 90
+    notification_max_attempts: int = 5
+    notification_lease_seconds: int = 300
+    # Platform channel config (for tenant_id-less sends: email verification, reset).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "no-reply@example.uz"
+    telegram_bot_token: str = ""
+    eskiz_email: str = ""
+    eskiz_password: str = ""
+
+    @property
+    def enabled_payment_provider_list(self) -> tuple[str, ...]:
+        return _split_csv(self.enabled_payment_providers)
+
     @property
     def cors_origin_list(self) -> tuple[str, ...]:
         return _split_csv(self.cors_origins)

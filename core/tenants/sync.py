@@ -14,14 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.permissions import permission_registry
 from core.tenants.models import Role, RolePermission
 from core.tenants.permissions import (
-    SYSTEM_ROLE_GRANTS,
     SYSTEM_ROLE_TITLES,
+    system_role_grants,
 )
 from shared.ids import new_uuid7
 
 
 async def sync_system_roles(session: AsyncSession) -> None:
-    for code, grants in SYSTEM_ROLE_GRANTS.items():
+    for code, grants in system_role_grants.resolved().items():
         for permission in grants:
             permission_registry.require_registered(permission)
 

@@ -5,6 +5,52 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.3.0] — 2026-07-07 — Фаза 3: Billing + Notifications + i18n
+
+> Тег `v0.3.0` ставится при приёмке фазы.
+
+### Added
+
+- **Billing** (ветка `core_billing`): валюты/планы (глобальные), подписки/платежи
+  (тенантные, без DELETE — финансовая история), журнал вебхуков (гибридный).
+  `PaymentService` (идемпотентное создание, статусная машина `created→pending→
+  succeeded|failed|canceled|expired`, активация подписки в одной транзакции),
+  `BillingService` (планы, старт/отмена/авто-подписка). Адаптеры Payme (JSON-RPC,
+  Basic-auth, тийины ×100) и Click (md5-подпись); `WebhookProcessor`
+  (идемпотентность, элевация system→tenant, сверка суммы, ответ в диалекте
+  провайдера). Джоба протухания checkout, авто-подписка новых тенантов (ОВ-21),
+  authed-эндпоинты `/api/billing` с правами. `docs/RECONCILIATION.md` (ручная
+  сверка, ОВ-24).
+- **Notifications** (ветка `core_notifications`): `notification_settings`
+  (тенантные, конфиг каналов шифрован), `notification_outbox` (гибридный;
+  диспатч `SELECT FOR UPDATE SKIP LOCKED` + lease; dedup `NULLS NOT DISTINCT`).
+  `NotificationService`: `send` (Recipient user/address, цепочка локали, dedup),
+  `get_status`, `set_channel_config` (write-only, threat model V10),
+  `get_channel_status` (маскированный). `register_templates` (симметрично
+  `register_permissions`, парити ru/uz на старте).
+- **Каналы** (`NotificationChannel`): Telegram (Bot API), Eskiz SMS
+  (нормализация телефона, кэш токена + прозрачный re-auth на 401, cap 280),
+  email/SMTP; dormant-by-default (нет кредов → no-op). Диспетчер outbox (arq,
+  backoff 1→2→4→8→16 мин, dead-letter + `notifications.message.failed`),
+  суточный лимит SMS per-tenant в Redis (ОВ-25), circuit breaker на канал
+  (`shared/resilience.py`), маскирование адресов в логах/событиях.
+- **i18n**: `shared/i18n.py` (negotiate_locale/Accept-Language/Catalog), каталог
+  ошибок `shared/locales/errors/{ru,uz}.json` подключён в DomainError-хендлер
+  (поле `message`); рендер шаблонов из файлов `templates/<locale>/` (`ru`+`uz`
+  обязательны). Чеки об оплате billing→notifications на `billing.payment.succeeded`
+  / `billing.subscription.activated` (шаблоны billing, получатель — владелец).
+- `SecretCipher` вынесен в `shared/encryption.py` (общий auth+notifications).
+  httpx переведён в рантайм-зависимости.
+
+### Upgrade notes
+
+- Новые ветки миграций `core_billing`, `core_notifications` — накат `upgrade heads`.
+- Новые env (см. `.env.example`): `ENABLED_PAYMENT_PROVIDERS`, креды Payme/Click,
+  `PAYMENT_CHECKOUT_TTL_SECONDS`, `BILLING_*`; `SMS_DAILY_CAP_PER_TENANT`,
+  `NOTIFICATION_*`, платформенные `SMTP_*`, `TELEGRAM_BOT_TOKEN`, `ESKIZ_*`.
+- Воркер получил cron-джобы: протухание checkout (5 мин) и диспетчер
+  уведомлений (15 с).
+
 ## [0.2.0] — 2026-07-06 — Фаза 2: Auth + Tenants
 
 ### Added

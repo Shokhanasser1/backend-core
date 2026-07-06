@@ -1,6 +1,6 @@
 [project]
 name = "backend-core"
-version = "0.2.0"
+version = "0.3.0"
 description = "Переиспользуемый шаблон-конструктор бэкенда: ядро → модули → фичи (рынок УЗ/СНГ)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,6 +22,7 @@ dependencies = [
     "pyjwt>=2.10",
     "pyotp>=2.9",
     "cryptography>=44.0",
+    "httpx>=0.28",
 ]
 
 [dependency-groups]
@@ -29,7 +30,6 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
-    "httpx>=0.28",
     "testcontainers[postgres,redis]>=4.9",
     "mypy>=1.13",
     "ruff>=0.8",

@@ -25,7 +25,7 @@ from core.tenants.service import TenantService
 from shared.context import Actor, RequestContext, TenantContext
 from shared.endpoint_markers import AUTHENTICATED_ATTR, PERMISSION_ATTR, PUBLIC_ATTR
 from shared.errors import AuthenticationError, PermissionDeniedError
-from shared.service import SqlAlchemyUnitOfWork
+from shared.service import SqlAlchemyUnitOfWork, UnitOfWork
 
 
 @dataclass(slots=True)
@@ -36,6 +36,9 @@ class ServiceBundle:
     tenants: TenantService
     access: AccessService
     audit: AuditService
+    # The request-scoped unit of work, exposed so sibling core modules (billing,
+    # ...) can build their services on the SAME transaction via their own deps.
+    uow: UnitOfWork
 
     @property
     def user_id(self) -> UUID:
@@ -110,6 +113,7 @@ async def _open_bundle(
             tenants=tenants,
             access=AccessService(tenants),
             audit=AuditService(uow.session, ctx),
+            uow=uow,
         )
         yield bundle
 

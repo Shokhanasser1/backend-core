@@ -1,0 +1,14 @@
+{
+  "errors.domain_error": "So'rovda xatolik.",
+  "errors.not_found": "Resurs topilmadi.",
+  "errors.conflict": "Ma'lumotlar to'qnashuvi.",
+  "errors.invariant_violation": "Biznes qoidasi buzildi.",
+  "errors.permission_denied": "Bu amal uchun ruxsat yetarli emas.",
+  "errors.authentication_failed": "Autentifikatsiyadan o'tib bo'lmadi.",
+  "errors.rate_limited": "So'rovlar juda ko'p, keyinroq urinib ko'ring.",
+  "errors.external_service_error": "Tashqi xizmat vaqtincha ishlamayapti.",
+  "errors.payment_provider_error": "To'lov provayderi xatosi.",
+  "errors.notification_channel_error": "Bildirishnoma kanali xatosi.",
+  "errors.webhook_verification_failed": "Vebhuk imzosini tekshirib bo'lmadi.",
+  "errors.circuit_open": "Xizmat vaqtincha ishlamayapti, keyinroq urinib ko'ring."
+}

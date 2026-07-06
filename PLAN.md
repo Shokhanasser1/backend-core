@@ -22,7 +22,7 @@ crm, saas и другие — см. бэклог.
 | 0 | План и схема | Схема БД ядра; карта интерфейсов и событий; threat model; стратегия обновления шаблона; открытые вопросы | Пользователь утвердил схему | ✅ |
 | 1 | Скелет | Структура, Docker Compose, Makefile, uv, конфиг, JSON-логи, health, шина событий, CI со сканами, pre-commit, Sentry, /metrics, ADR №1–6 | `make dev` поднимается; `make test` и CI зелёные | 🟨 |
 | 2 | Auth + Tenants | Регистрация, JWT+refresh, 2FA, RBAC, организации, приглашения; обязательные права на роутах | Интеграционные тесты всех сценариев, включая негативные | 🟨 |
-| 3 | Billing + Notifications + i18n | PaymentProvider (Payme, Click), вебхуки с подписью и идемпотентностью; NotificationChannel (Telegram, Eskiz, email) через очередь; каталоги ru/uz | Негативные тесты вебхуков; уведомления уходят из очереди | ⬜ |
+| 3 | Billing + Notifications + i18n | PaymentProvider (Payme, Click), вебхуки с подписью и идемпотентностью; NotificationChannel (Telegram, Eskiz, email) через очередь; каталоги ru/uz | Негативные тесты вебхуков; уведомления уходят из очереди | 🟨 |
 | 4 | Audit + Admin-каркас | Append-only аудит; admin-API с механизмом регистрации экранов модулей | Стандарты фазы + тесты | ⬜ |
 | 5 | CLAUDE.md + документация | Расширить CLAUDE.md конвенциями; README модулей ядра; ADR | Новая сессия Claude работает без этой переписки | ⬜ |
 | 6 | Commerce + конструктор | Фичи products/cart/orders; загрузчик фич (feature.toml, проверка requires на старте); tools/add-feature; README-меню модуля | products переносится в чистый проект и заводится; cart без products валит старт с понятной ошибкой | ⬜ |
@@ -50,6 +50,27 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-07 — Фаза 3 построена (ждёт приёмки владельцем): Billing +
+  Notifications + i18n. **Billing:** ветка `core_billing` (валюты/планы
+  глобальные; подписки/платежи тенантные без DELETE; вебхуки гибридные),
+  `PaymentService` (идемпотентность, статусная машина, активация подписки в
+  одной транзакции) + `BillingService`, адаптеры Payme (JSON-RPC/Basic/тийины)
+  и Click (md5), `WebhookProcessor` (идемпотентность + элевация system→tenant +
+  сверка суммы + диалект провайдера), джоба протухания checkout, авто-подписка
+  (ОВ-21), authed `/api/billing` с правами, `docs/RECONCILIATION.md` (ОВ-24).
+  **Notifications:** ветка `core_notifications` (settings шифрованы; outbox
+  гибридный, SKIP LOCKED + lease, dedup NULLS NOT DISTINCT), `NotificationService`
+  (send/get_status/set_channel_config write-only/get_channel_status), реестр
+  шаблонов (парити ru/uz на старте), каналы Telegram/Eskiz/SMTP (dormant-by-
+  default, circuit breaker, маскирование), диспетчер outbox (arq, backoff,
+  dead-letter + `notifications.message.failed`), суточный лимит SMS в Redis
+  (ОВ-25), чеки billing→notifications. **i18n:** `shared/i18n.py` + каталог
+  ошибок ru/uz в DomainError-хендлере; рендер шаблонов из файлов. `SecretCipher`
+  → `shared/encryption.py`; httpx → рантайм. Решены ОВ-20…ОВ-25 (рекомендации).
+  Проверки: **219 тестов зелёные**, покрытие 87.78% (≥85%), ruff/mypy strict/
+  import-linter чисто, миграции 5 веток (upgrade heads + downgrade), **compose-
+  smoke сквозной** (register→tenant→авто-подписка→чек в outbox→диспетчер отправил).
+  Осталось для приёмки: подтверждение владельца; затем коммит + тег v0.3.0.
 - 2026-07-06 — Фаза 2 построена (ждёт приёмки владельцем): полный цикл
   auth+tenants сверх фундамента. Добавлены минимальный аудит (append-only +
   wildcard-сток), RBAC (реестр прав, системные роли owner/admin/member с

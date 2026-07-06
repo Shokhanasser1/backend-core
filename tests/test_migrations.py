@@ -70,7 +70,18 @@ def test_upgrade_heads_downgrade_upgrade(
 
     # Apply ALL heads (strictly "heads", not "head" — multi-branch layout).
     # Both branches must land: processed_events (shared) and users (core_auth).
-    all_tables = ("processed_events", "users", "tenants", "memberships", "audit_log")
+    all_tables = (
+        "processed_events",
+        "users",
+        "tenants",
+        "memberships",
+        "audit_log",
+        "currencies",
+        "plans",
+        "payments",
+        "notification_settings",
+        "notification_outbox",
+    )
     command.upgrade(config, "heads")
     for table in all_tables:
         assert asyncio.run(_table_exists(migrator_url, table)), table
@@ -80,6 +91,10 @@ def test_upgrade_heads_downgrade_upgrade(
     assert asyncio.run(_table_exists(migrator_url, "memberships"))
 
     # Reversibility: every migration has a working downgrade to each branch base.
+    command.downgrade(config, "core_billing@base")
+    assert not asyncio.run(_table_exists(migrator_url, "payments"))
+    command.downgrade(config, "core_notifications@base")
+    assert not asyncio.run(_table_exists(migrator_url, "notification_outbox"))
     command.downgrade(config, "core_audit@base")
     assert not asyncio.run(_table_exists(migrator_url, "audit_log"))
     command.downgrade(config, "core_tenants@base")

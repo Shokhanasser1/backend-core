@@ -30,10 +30,10 @@ from core.auth.schemas import (
     UserDTO,
 )
 from core.auth.security import passwords, totp
-from core.auth.security.encryption import SecretCipher
 from core.auth.security.tokens import encode_access_token
 from shared.config import Settings
 from shared.context import TenantContext
+from shared.encryption import SecretCipher
 from shared.errors import (
     AuthenticationError,
     ConflictError,

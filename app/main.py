@@ -22,13 +22,20 @@ from app.routes import router as infra_router
 from app.startup_checks import validate_route_permissions
 from core.auth.access_service import register_permissions
 from core.auth.router import router as auth_router
-from core.auth.security.encryption import SecretCipher
+from core.billing.adapters import build_payment_providers
+from core.billing.api import router as billing_api_router
+from core.billing.permissions import register_billing_rbac
+from core.billing.router import router as billing_webhook_router
 from core.tenants.permissions import TENANTS_PERMISSIONS
 from core.tenants.router import router as tenants_router
 from core.tenants.sync import sync_system_roles
 from shared import TEMPLATE_VERSION
+from shared.encryption import SecretCipher
+from shared.error_catalog import ERROR_CATALOG
 from shared.errors import DomainError
 from shared.events import bus
+from shared.i18n import negotiate_locale, parse_accept_language
+from shared.money import currency_registry
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -39,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Declare the permission catalog before the route validator runs.
     register_permissions("tenants", TENANTS_PERMISSIONS)
+    register_billing_rbac()  # billing permissions + their grants to system roles
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -63,10 +71,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.arq_pool = arq_pool
         app.state.bus = bus
         app.state.cipher = SecretCipher(app_settings.secret_encryption_key_list)
+        # Enabled payment providers (Payme/Click); the webhook routes read this.
+        # A provider enabled without credentials fails loudly here, at startup.
+        app.state.payment_providers = build_payment_providers(app_settings)
 
-        # Idempotently reconcile system roles + grants (as app_maintenance).
+        # Idempotently reconcile system roles + grants (as app_maintenance) and
+        # load the currency exponents into the process-global registry (§2.5).
         async with database.maintenance_sessions() as session:
             await sync_system_roles(session)
+            await currency_registry.load(session)
 
         logger.info(
             "application_started",
@@ -90,17 +103,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(infra_router)
     application.include_router(auth_router)
     application.include_router(tenants_router)
+    application.include_router(billing_api_router)
+    application.include_router(billing_webhook_router)
 
     @application.exception_handler(DomainError)
-    async def handle_domain_error(_request: Request, exc: DomainError) -> JSONResponse:
+    async def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:
         # Single mapping of the DomainError hierarchy onto HTTP (OV-07).
-        # message_key is resolved via i18n catalogs starting from Phase 3.
+        # message_key stays machine-readable; message is rendered in the request
+        # locale (Accept-Language -> 'ru') via the i18n error catalog (Phase 3).
+        locale = negotiate_locale(parse_accept_language(request.headers.get("accept-language")))
         return JSONResponse(
             status_code=exc.http_status,
             content={
                 "error": {
                     "code": exc.code,
                     "message_key": exc.message_key,
+                    "message": ERROR_CATALOG.get(exc.message_key, locale),
                     "detail": exc.detail,
                 }
             },

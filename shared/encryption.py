@@ -1,9 +1,11 @@
 """Application-level secret encryption (Fernet/MultiFernet; decision OV-19).
 
-TOTP secrets and (later) tenant channel configs are encrypted with a key from
-the environment. MultiFernet supports rotation: put the new key first, keep old
-keys for decryption, re-encrypt lazily. In dev, an empty key list falls back to
-a fixed, obviously-insecure key so the stack runs without configuration.
+A cross-cutting primitive in shared/: TOTP secrets (core/auth) and tenant
+channel configs (core/notifications) are both encrypted with a key from the
+environment, so the cipher lives below both — keeping app -> core -> shared.
+MultiFernet supports rotation: put the new key first, keep old keys for
+decryption, re-encrypt lazily. In dev, an empty key list falls back to a fixed,
+obviously-insecure key so the stack runs without configuration.
 """
 
 import base64

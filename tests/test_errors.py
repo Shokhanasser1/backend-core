@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from shared.endpoint_markers import PUBLIC_ATTR
+from shared.error_catalog import ERROR_CATALOG
 from shared.errors import (
     AuthenticationError,
     CircuitOpenError,
@@ -68,3 +69,9 @@ def test_domain_error_is_mapped_to_http_response() -> None:
     assert body["error"]["code"] == "not_found"
     assert body["error"]["message_key"] == "errors.not_found"
     assert body["error"]["detail"] == "gadget 42 not found"
+    # message is localized via the i18n error catalog (default locale = ru).
+    assert body["error"]["message"] == ERROR_CATALOG.get("errors.not_found", "ru")
+
+    # Accept-Language negotiates the localized message (uz).
+    uz = client.get("/boom", headers={"Accept-Language": "uz-UZ,uz;q=0.9"})
+    assert uz.json()["error"]["message"] == ERROR_CATALOG.get("errors.not_found", "uz")

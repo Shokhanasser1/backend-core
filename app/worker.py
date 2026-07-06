@@ -10,6 +10,7 @@ with exponential backoff; after that the failure is logged as a dead letter
 from typing import Any, ClassVar, cast
 
 import structlog
+from arq import cron
 from arq.connections import RedisSettings
 from arq.worker import Retry
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -20,8 +21,13 @@ from app.config import get_settings
 from app.db import create_engine, create_session_factory
 from app.logging_setup import configure_logging
 from app.observability import init_sentry
+from core.billing.jobs import expire_stale_checkouts
+from core.notifications.channels import build_notification_channels
+from core.notifications.dispatcher import dispatch_due_notifications
+from core.notifications.registry import template_registry
 from shared import TEMPLATE_VERSION
 from shared.context import TenantContext
+from shared.encryption import SecretCipher
 from shared.events import EventEnvelope, bus
 from shared.handler_runtime import HandlerRuntime, reset_handler_runtime, set_handler_runtime
 from shared.processed_events import ProcessedEvent
@@ -100,6 +106,24 @@ async def dispatch_event(ctx: dict[str, Any], handler_id: str, wire: dict[str, A
         raise Retry(defer=defer_seconds) from None
 
 
+async def expire_checkouts(ctx: dict[str, Any]) -> int:
+    """Scheduled sweep: abandoned checkouts past TTL -> expired (schema §2.3)."""
+    return await expire_stale_checkouts(ctx["maintenance_sessions"], ctx["bus"], ctx["settings"])
+
+
+async def dispatch_notifications(ctx: dict[str, Any]) -> int:
+    """Scheduled outbox drain: deliver due notifications (schema §2.4, §4.2)."""
+    return await dispatch_due_notifications(
+        ctx["maintenance_sessions"],
+        ctx["redis"],
+        ctx["bus"],
+        ctx["settings"],
+        ctx["cipher"],
+        template_registry,
+        ctx["notification_channels"],
+    )
+
+
 async def on_startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -110,7 +134,10 @@ async def on_startup(ctx: dict[str, Any]) -> None:
     ctx["maintenance_engine"] = maintenance_engine
     ctx["session_factory"] = create_session_factory(user_engine)
     ctx["maintenance_sessions"] = create_session_factory(maintenance_engine)
+    ctx["settings"] = settings
     ctx["bus"] = bus
+    ctx["cipher"] = SecretCipher(settings.secret_encryption_key_list)
+    ctx["notification_channels"] = build_notification_channels(settings)
 
     async def enqueue_reliable(handler_id: str, wire: dict[str, Any]) -> None:
         # Handlers may emit events themselves; they are enqueued via the
@@ -129,7 +156,13 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 class WorkerSettings:
     """arq entrypoint: ``arq app.worker.WorkerSettings``."""
 
-    functions: ClassVar[list[Any]] = [dispatch_event]
+    functions: ClassVar[list[Any]] = [dispatch_event, expire_checkouts, dispatch_notifications]
+    # Checkout-expiry sweep every 5 minutes (interfaces §3.3); notification outbox
+    # drained every 15 seconds so queued messages leave promptly (schema §2.4).
+    cron_jobs: ClassVar[list[Any]] = [
+        cron(expire_checkouts, minute=set(range(0, 60, 5))),
+        cron(dispatch_notifications, second={0, 15, 30, 45}),
+    ]
     on_startup = staticmethod(on_startup)
     on_shutdown = staticmethod(on_shutdown)
     max_tries = MAX_TRIES

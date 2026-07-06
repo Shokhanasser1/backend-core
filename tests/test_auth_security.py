@@ -8,7 +8,7 @@ import pytest
 
 from app.config import Settings
 from core.auth.security import passwords, tokens, totp
-from core.auth.security.encryption import SecretCipher, generate_key
+from shared.encryption import SecretCipher, generate_key
 from shared.errors import AuthenticationError
 
 
