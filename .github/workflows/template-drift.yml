@@ -1,0 +1,97 @@
+# Заготовка CI-джобы клиентского проекта (стратегия обновления, §4.2.6).
+# В репозитории шаблона проверки пропускаются: маркер клиентского проекта —
+# файл CUSTOMIZATIONS.md в корне (создаётся при bootstrap клиентского проекта).
+# Финализируется в Фазе 5 вместе с docs/UPDATE.md.
+
+name: template-drift
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Определить клиентский проект
+        id: detect
+        run: |
+          if [ -f CUSTOMIZATIONS.md ]; then
+            echo "client=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "client=false" >> "$GITHUB_OUTPUT"
+            echo "Репозиторий шаблона — проверки дрейфа пропущены."
+          fi
+
+      - name: Версия влитого релиза шаблона
+        if: steps.detect.outputs.client == 'true'
+        id: version
+        run: |
+          V=$(grep -oE 'TEMPLATE_VERSION = "[^"]+"' shared/__init__.py | cut -d'"' -f2)
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+
+      - name: "Проверка (а): общий предок с тегом шаблона сохранён"
+        if: steps.detect.outputs.client == 'true'
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Тег $TAG не найден в origin — выполните шаг 'git push origin $TAG' из docs/UPDATE.md"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TAG" HEAD; then
+            echo "::error::$TAG не является предком HEAD: squash/rebase уничтожил общего предка (конвенция 4.2.2)"
+            exit 1
+          fi
+
+      - name: "Проверка (б): незадекларированный дрейф шаблонных путей (report-only)"
+        if: steps.detect.outputs.client == 'true'
+        continue-on-error: true
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          git diff --name-only "$TAG" HEAD -- core/ shared/ modules/ > drift.txt || true
+          if [ ! -s drift.txt ]; then
+            echo "Дрейфа шаблонных путей нет."
+            exit 0
+          fi
+          MISSING=0
+          while read -r file; do
+            if ! grep -qF "$file" CUSTOMIZATIONS.md; then
+              echo "::warning file=$file::изменение шаблонного пути не задекларировано в CUSTOMIZATIONS.md"
+              MISSING=1
+            fi
+          done < drift.txt
+          exit $MISSING
+
+      - name: "Проверка (в): владение Alembic-ветками"
+        if: steps.detect.outputs.client == 'true'
+        run: |
+          python3 - <<'CHECK'
+          import re
+          import sys
+          from pathlib import Path
+
+          TEMPLATE_PREFIXES = ("core/", "shared/", "modules/")
+          errors: list[str] = []
+          for path in Path(".").glob("**/migrations/*.py"):
+              rel = path.as_posix()
+              # Корневой migrations/ — только env/конфиг, ревизий не содержит.
+              if rel.startswith((".venv/", "migrations/")):
+                  continue
+              match = re.search(r"branch_labels[^=]*=\s*(.+)", path.read_text(encoding="utf-8"))
+              labels = match.group(1) if match else ""
+              is_project_branch = "project" in labels
+              in_template_path = rel.startswith(TEMPLATE_PREFIXES)
+              if in_template_path and is_project_branch:
+                  errors.append(f"{rel}: ревизия ветки project в шаблонном пути")
+              if not in_template_path and not is_project_branch:
+                  errors.append(f"{rel}: клиентская ревизия обязана жить в ветке project")
+          if errors:
+              print("\n".join(errors))
+              sys.exit(1)
+          print("Владение Alembic-ветками корректно.")
+          CHECK

@@ -1,0 +1,86 @@
+# CI-конвейер шаблона: lint → mypy → tests → security-сканы → build + trivy.
+# Красный CI = не мержим.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - name: Лок-файл синхронизирован с pyproject (V8)
+        run: uv lock --check
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy app shared migrations tests
+      - name: Контракты импортов (слои app → shared, SystemRepository только для core)
+        run: uv run lint-imports
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - name: Тесты с покрытием (testcontainers: Postgres 16 + Redis 7)
+        run: >
+          uv run pytest
+          --cov=app --cov=shared
+          --cov-report=term-missing
+          --cov-fail-under=85
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit (известные CVE зависимостей)
+        run: |
+          uv export --format requirements-txt --no-emit-project -o requirements-ci.txt
+          uvx pip-audit -r requirements-ci.txt
+      - name: bandit (SAST)
+        run: uvx bandit -c pyproject.toml -r app shared migrations
+
+  gitleaks:
+    # Секрет-сканер (решение ОВ-30): утечка секрета в шаблоне тиражируется
+    # по всем клиентским проектам — главный самострел.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Сборка образа
+        run: docker build -t backend-core:${{ github.sha }} .
+      - name: trivy-скан образа (CRITICAL/HIGH блокируют)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: backend-core:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true

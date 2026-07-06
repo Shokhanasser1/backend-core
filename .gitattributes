@@ -1,0 +1,5 @@
+# Нормализация переносов строк: шаблон клонируется на разных ОС.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

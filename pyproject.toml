@@ -1,0 +1,100 @@
+[project]
+name = "backend-core"
+version = "0.1.0"
+description = "Переиспользуемый шаблон-конструктор бэкенда: ядро → модули → фичи (рынок УЗ/СНГ)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "redis>=5.2",
+    "arq>=0.26",
+    "structlog>=24.4",
+    "sentry-sdk>=2.19",
+    "prometheus-client>=0.21",
+    "uuid-utils>=0.10",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "testcontainers[postgres,redis]>=4.9",
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "import-linter>=2.1",
+    "pre-commit>=4.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle / pyflakes
+    "I",                # isort
+    "N",                # pep8-naming
+    "UP",               # pyupgrade
+    "B",                # bugbear
+    "C4",               # comprehensions
+    "DTZ",              # naive datetime запрещён
+    "T20",              # print запрещён (только структурированные логи)
+    "SIM",              # simplify
+    "PTH",              # pathlib
+    "RUF",              # ruff-специфичные
+    "S",                # bandit-подмножество
+    "ASYNC",            # async-ловушки
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311", "S608"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+exclude = ["^\\.venv/"]
+
+[[tool.mypy.overrides]]
+module = ["testcontainers.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+markers = [
+    "integration: тесты с реальными Postgres/Redis через testcontainers (нужен Docker)",
+]
+
+[tool.coverage.run]
+source = ["app", "shared"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+
+[tool.importlinter]
+root_packages = ["app", "shared"]
+
+[[tool.importlinter.contracts]]
+name = "Слои: app зависит от shared, не наоборот"
+type = "layers"
+layers = ["app", "shared"]
+
+[[tool.importlinter.contracts]]
+name = "SystemRepository — только для core/ (app запрещён)"
+type = "forbidden"
+source_modules = ["app"]
+forbidden_modules = ["shared.system_repository"]
