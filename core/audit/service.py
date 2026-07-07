@@ -15,14 +15,16 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.audit.models import AuditLog
+from core.audit.schemas import AuditQuery, AuditRecordDTO
 from shared.context import RequestContext, TenantContext
 from shared.events import EventEnvelope
 from shared.ids import new_uuid7
+from shared.pagination import Page, PageResult
 
 # High-frequency telemetry we do not mirror into the audit journal (§3.5).
 AUDIT_EXCLUDED_EVENTS = frozenset({"notifications.message.sent"})
@@ -92,3 +94,44 @@ class AuditService:
             .on_conflict_do_nothing(**_DEDUP_KW)
         )
         await self._session.execute(stmt)
+
+    async def search(self, query: AuditQuery, page: Page) -> PageResult[AuditRecordDTO]:
+        """Paginated read for the tenant's admin activity log. Scoped to the
+        current tenant explicitly (first line) and by RLS (second line); system
+        rows (tenant_id NULL) are never visible to a tenant admin."""
+        conditions = [AuditLog.tenant_id == self._ctx.tenant_id]
+        if query.action_prefix:
+            # autoescape neutralises %/_ so a user-supplied prefix is a literal.
+            conditions.append(AuditLog.action.startswith(query.action_prefix, autoescape=True))
+        if query.actor_user_id is not None:
+            conditions.append(AuditLog.user_id == query.actor_user_id)
+        if query.object_type is not None:
+            conditions.append(AuditLog.object_type == query.object_type)
+        if query.object_id is not None:
+            conditions.append(AuditLog.object_id == query.object_id)
+        if query.date_from is not None:
+            conditions.append(AuditLog.created_at >= query.date_from)
+        if query.date_to is not None:
+            conditions.append(AuditLog.created_at < query.date_to)
+
+        total = (
+            await self._session.execute(
+                select(func.count()).select_from(AuditLog).where(*conditions)
+            )
+        ).scalar_one()
+        rows = (
+            (
+                await self._session.execute(
+                    select(AuditLog)
+                    .where(*conditions)
+                    # id is UUIDv7 (time-ordered), so it breaks created_at ties stably.
+                    .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+                    .limit(page.limit)
+                    .offset(page.offset)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        items = [AuditRecordDTO.model_validate(row) for row in rows]
+        return PageResult(items=items, total=total, limit=page.limit, offset=page.offset)

@@ -20,10 +20,10 @@ crm, saas и другие — см. бэклог.
 | # | Фаза | Что делаем | Критерий приёмки | Статус |
 |---|------|-----------|------------------|--------|
 | 0 | План и схема | Схема БД ядра; карта интерфейсов и событий; threat model; стратегия обновления шаблона; открытые вопросы | Пользователь утвердил схему | ✅ |
-| 1 | Скелет | Структура, Docker Compose, Makefile, uv, конфиг, JSON-логи, health, шина событий, CI со сканами, pre-commit, Sentry, /metrics, ADR №1–6 | `make dev` поднимается; `make test` и CI зелёные | 🟨 |
-| 2 | Auth + Tenants | Регистрация, JWT+refresh, 2FA, RBAC, организации, приглашения; обязательные права на роутах | Интеграционные тесты всех сценариев, включая негативные | 🟨 |
-| 3 | Billing + Notifications + i18n | PaymentProvider (Payme, Click), вебхуки с подписью и идемпотентностью; NotificationChannel (Telegram, Eskiz, email) через очередь; каталоги ru/uz | Негативные тесты вебхуков; уведомления уходят из очереди | 🟨 |
-| 4 | Audit + Admin-каркас | Append-only аудит; admin-API с механизмом регистрации экранов модулей | Стандарты фазы + тесты | ⬜ |
+| 1 | Скелет | Структура, Docker Compose, Makefile, uv, конфиг, JSON-логи, health, шина событий, CI со сканами, pre-commit, Sentry, /metrics, ADR №1–6 | `make dev` поднимается; `make test` и CI зелёные | ✅ |
+| 2 | Auth + Tenants | Регистрация, JWT+refresh, 2FA, RBAC, организации, приглашения; обязательные права на роутах | Интеграционные тесты всех сценариев, включая негативные | ✅ |
+| 3 | Billing + Notifications + i18n | PaymentProvider (Payme, Click), вебхуки с подписью и идемпотентностью; NotificationChannel (Telegram, Eskiz, email) через очередь; каталоги ru/uz | Негативные тесты вебхуков; уведомления уходят из очереди | ✅ |
+| 4 | Audit + Admin-каркас | Append-only аудит; admin-API с механизмом регистрации экранов модулей | Стандарты фазы + тесты | 🟨 |
 | 5 | CLAUDE.md + документация | Расширить CLAUDE.md конвенциями; README модулей ядра; ADR | Новая сессия Claude работает без этой переписки | ⬜ |
 | 6 | Commerce + конструктор | Фичи products/cart/orders; загрузчик фич (feature.toml, проверка requires на старте); tools/add-feature; README-меню модуля | products переносится в чистый проект и заводится; cart без products валит старт с понятной ошибкой | ⬜ |
 
@@ -50,6 +50,33 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-07 — Статусы фаз 1–3 выправлены на ✅: таблица отставала (стояли 🟨),
+  хотя фазы приняты и помечены тегами v0.1.0/v0.2.0/v0.3.0 (тег ставится при
+  приёмке). Фаза 3 закоммичена (ef0a738 на main).
+- 2026-07-07 — Фаза 4 построена (ждёт приёмки владельцем): Audit + Admin-каркас.
+  **Admin** (`core/admin`, таблиц нет — чистый API, §2.6): `AdminScreen`/
+  `AdminRegistry` — модули/фичи регистрируют admin-экраны (симметрично
+  `register_permissions`/`register_templates`); монтирование под `/api/admin/{slug}`
+  на старте; `GET /api/admin/screens` (право `admin.screen:read`) отдаёт меню только
+  из доступных экранов (`AdminService.screens_for`); строгая валидация §5.4 (у
+  admin-роута только `require_permission`). **Audit** — достроен: `AuditService.search`
+  (фильтры action/actor/object/даты, пагинация, тенант-скоуп RLS + явный фильтр);
+  первый admin-экран `audit` (`GET /api/admin/audit`, `audit.record:read`, owner/admin);
+  ретенция `audit_log` как `app_retention` (OV-27, 24 мес). **Ретенция служебных
+  таблиц** (обещания докстрингов Фазы 4): `processed_events` (§2.7, 30 дн,
+  `app_maintenance`) и терминальные PII-строки `notification_outbox` (§2.4,
+  `app_maintenance`) — одной суточной джобой `purge_retention`, батчами. Новый конфиг
+  `DATABASE_RETENTION_URL`, `PROCESSED_EVENTS_RETENTION_DAYS`. **Попутно исправлены
+  два дефекта:** (1) миграция `core_audit0002` — RLS-политики `app_retention` на
+  `audit_log` (базовая ревизия выдала грант `SELECT,DELETE`, но политику не создала →
+  свип удалял бы 0 строк); (2) стартовая валидация прав переписана на
+  `iter_route_contexts` — в текущей версии FastAPI `include_router` создаёт ленивый
+  `_IncludedRouter`, и старый обход `app.routes`/`isinstance(APIRoute)` пропускал ВСЕ
+  включённые роутеры (инвариант «нет права → не стартует» по факту не применялся).
+  Проверки: **247 тестов зелёные**, покрытие **88.88%** (≥85), ruff/mypy strict/
+  import-linter чисто, миграции всех веток (upgrade heads + downgrade, включая новую
+  core_audit0002). Осталось для приёмки: подтверждение владельца; затем коммит + тег
+  v0.4.0.
 - 2026-07-07 — Фаза 3 построена (ждёт приёмки владельцем): Billing +
   Notifications + i18n. **Billing:** ветка `core_billing` (валюты/планы
   глобальные; подписки/платежи тенантные без DELETE; вебхуки гибридные),

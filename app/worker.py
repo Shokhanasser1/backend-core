@@ -7,6 +7,7 @@ with exponential backoff; after that the failure is logged as a dead letter
 (and reaches Sentry via the logging integration).
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, cast
 
 import structlog
@@ -17,21 +18,28 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 
 import core.subscribers  # noqa: F401  (register core subscribers in the worker process)
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import create_engine, create_session_factory
 from app.logging_setup import configure_logging
 from app.observability import init_sentry
+from core.audit.retention import purge_expired_audit
 from core.billing.jobs import expire_stale_checkouts
 from core.notifications.channels import build_notification_channels
 from core.notifications.dispatcher import dispatch_due_notifications
 from core.notifications.registry import template_registry
+from core.notifications.retention import purge_expired_notifications
 from shared import TEMPLATE_VERSION
 from shared.context import TenantContext
 from shared.encryption import SecretCipher
 from shared.events import EventEnvelope, bus
 from shared.handler_runtime import HandlerRuntime, reset_handler_runtime, set_handler_runtime
-from shared.processed_events import ProcessedEvent
+from shared.processed_events import ProcessedEvent, purge_processed_events
 from shared.service import SqlAlchemyUnitOfWork
+
+_Sweep = Callable[[Any, Settings], Awaitable[int]]
+# Cap the per-run drain so one cron tick can never hold the worker indefinitely;
+# each sweep call is its own bounded, committed transaction (schema §2.5/§2.7).
+_MAX_DRAIN_BATCHES = 100
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -124,16 +132,49 @@ async def dispatch_notifications(ctx: dict[str, Any]) -> int:
     )
 
 
+async def _drain(sweep: _Sweep, sessions: Any, settings: Settings) -> int:
+    """Call a bounded sweep repeatedly until a run deletes nothing (backlog drained)
+    or the safety cap is hit — never one unbounded transaction."""
+    total = 0
+    for _ in range(_MAX_DRAIN_BATCHES):
+        deleted = await sweep(sessions, settings)
+        total += deleted
+        if deleted == 0:
+            break
+    return total
+
+
+async def purge_retention(ctx: dict[str, Any]) -> dict[str, int]:
+    """Daily retention sweep: audit_log (as app_retention), plus processed_events
+    and the notification outbox's terminal PII rows (as app_maintenance).
+    Schema §2.4/§2.5/§2.7; audit_log is OV-27."""
+    settings: Settings = ctx["settings"]
+    counts = {
+        "audit_log": await _drain(purge_expired_audit, ctx["retention_sessions"], settings),
+        "processed_events": await _drain(
+            purge_processed_events, ctx["maintenance_sessions"], settings
+        ),
+        "notification_outbox": await _drain(
+            purge_expired_notifications, ctx["maintenance_sessions"], settings
+        ),
+    }
+    logger.info("retention sweep complete", **counts)
+    return counts
+
+
 async def on_startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     init_sentry(settings)
     user_engine = create_engine(settings.database_url)
     maintenance_engine = create_engine(settings.database_maintenance_url)
+    retention_engine = create_engine(settings.database_retention_url)
     ctx["user_engine"] = user_engine
     ctx["maintenance_engine"] = maintenance_engine
+    ctx["retention_engine"] = retention_engine
     ctx["session_factory"] = create_session_factory(user_engine)
     ctx["maintenance_sessions"] = create_session_factory(maintenance_engine)
+    ctx["retention_sessions"] = create_session_factory(retention_engine)
     ctx["settings"] = settings
     ctx["bus"] = bus
     ctx["cipher"] = SecretCipher(settings.secret_encryption_key_list)
@@ -151,17 +192,25 @@ async def on_startup(ctx: dict[str, Any]) -> None:
 async def on_shutdown(ctx: dict[str, Any]) -> None:
     await ctx["user_engine"].dispose()
     await ctx["maintenance_engine"].dispose()
+    await ctx["retention_engine"].dispose()
 
 
 class WorkerSettings:
     """arq entrypoint: ``arq app.worker.WorkerSettings``."""
 
-    functions: ClassVar[list[Any]] = [dispatch_event, expire_checkouts, dispatch_notifications]
+    functions: ClassVar[list[Any]] = [
+        dispatch_event,
+        expire_checkouts,
+        dispatch_notifications,
+        purge_retention,
+    ]
     # Checkout-expiry sweep every 5 minutes (interfaces §3.3); notification outbox
-    # drained every 15 seconds so queued messages leave promptly (schema §2.4).
+    # drained every 15 seconds so queued messages leave promptly (schema §2.4);
+    # retention sweep once daily at 03:00 (schema §2.5, OV-27).
     cron_jobs: ClassVar[list[Any]] = [
         cron(expire_checkouts, minute=set(range(0, 60, 5))),
         cron(dispatch_notifications, second={0, 15, 30, 45}),
+        cron(purge_retention, hour={3}, minute={0}),
     ]
     on_startup = staticmethod(on_startup)
     on_shutdown = staticmethod(on_shutdown)

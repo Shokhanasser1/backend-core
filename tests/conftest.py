@@ -31,6 +31,7 @@ from shared.context import Actor, TenantContext
 from shared.db_provisioning import (
     ROLE_MAINTENANCE,
     ROLE_MIGRATOR,
+    ROLE_RETENTION,
     ROLE_USER,
     render_role_bootstrap_statements,
 )
@@ -89,7 +90,7 @@ def role_urls(superuser_url: str) -> dict[str, str]:
     asyncio.run(provision())
     return {
         role: _with_credentials(superuser_url, role, role)
-        for role in (ROLE_MIGRATOR, ROLE_USER, ROLE_MAINTENANCE)
+        for role in (ROLE_MIGRATOR, ROLE_USER, ROLE_MAINTENANCE, ROLE_RETENTION)
     }
 
 
@@ -170,6 +171,23 @@ def maintenance_session_factory(
 
 
 @pytest.fixture
+async def retention_engine(
+    role_urls: dict[str, str], _clean_db: None
+) -> AsyncIterator[AsyncEngine]:
+    """Engine as app_retention — SELECT + DELETE on audit_log only (schema §3.1)."""
+    engine = create_async_engine(role_urls[ROLE_RETENTION])
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+def retention_session_factory(
+    retention_engine: AsyncEngine,
+) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(retention_engine, expire_on_commit=False)
+
+
+@pytest.fixture
 def tenant_ctx() -> TenantContext:
     return TenantContext(
         tenant_id=uuid4(), actor=Actor(kind="user", id=str(uuid4())), request_id="req-1"
@@ -192,6 +210,7 @@ def test_settings(role_urls: dict[str, str], redis_url: str) -> Settings:
         database_url=role_urls[ROLE_USER],
         database_migrator_url=role_urls[ROLE_MIGRATOR],
         database_maintenance_url=role_urls[ROLE_MAINTENANCE],
+        database_retention_url=role_urls[ROLE_RETENTION],
         redis_url=redis_url,
     )
 

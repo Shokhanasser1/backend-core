@@ -55,6 +55,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://app_user:app_user@db:5432/backend_core
       DATABASE_MAINTENANCE_URL: postgresql+asyncpg://app_maintenance:app_maintenance@db:5432/backend_core
+      DATABASE_RETENTION_URL: postgresql+asyncpg://app_retention:app_retention@db:5432/backend_core
       REDIS_URL: redis://redis:6379/0
     env_file:
       - path: .env

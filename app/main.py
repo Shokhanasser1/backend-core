@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import core.subscribers  # noqa: F401  (register core event subscribers on the bus)
+from app.admin_screens import mount_admin_screens
 from app.config import Settings, get_settings
 from app.db import Database
 from app.logging_setup import configure_logging
@@ -19,7 +20,11 @@ from app.middleware import MetricsMiddleware, RequestIDMiddleware, SecurityHeade
 from app.observability import init_sentry
 from app.redis_client import create_redis
 from app.routes import router as infra_router
-from app.startup_checks import validate_route_permissions
+from app.startup_checks import validate_admin_routes, validate_route_permissions
+from core.admin.permissions import register_admin_rbac
+from core.admin.router import router as admin_router
+from core.admin.screens import register_admin_screens
+from core.audit.permissions import register_audit_rbac
 from core.auth.access_service import register_permissions
 from core.auth.router import router as auth_router
 from core.billing.adapters import build_payment_providers
@@ -44,14 +49,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     configure_logging(app_settings.log_level)
 
-    # Declare the permission catalog before the route validator runs.
+    # Declare the permission catalog before the route validator runs. Each module
+    # registers its codes + grants; admin screens register on the registry.
     register_permissions("tenants", TENANTS_PERMISSIONS)
     register_billing_rbac()  # billing permissions + their grants to system roles
+    register_audit_rbac()  # audit.record:read (owner/admin) — audit admin screen
+    register_admin_rbac()  # admin.screen:read (owner/admin) — the admin menu
+    register_admin_screens()  # import module admin.py files -> populate the registry
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Fail fast, before any external connection is made.
         validate_route_permissions(app)
+        validate_admin_routes(app)  # admin routes: require_permission only (§5.4)
 
         sentry_enabled = init_sentry(app_settings)
         database = Database(app_settings)
@@ -105,6 +115,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(tenants_router)
     application.include_router(billing_api_router)
     application.include_router(billing_webhook_router)
+    application.include_router(admin_router)  # /api/admin/screens (the menu)
+    mount_admin_screens(application)  # /api/admin/{slug} for each registered screen
 
     @application.exception_handler(DomainError)
     async def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:

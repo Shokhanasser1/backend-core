@@ -5,6 +5,48 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.4.0] — 2026-07-07 — Фаза 4: Audit + Admin-каркас
+
+> Тег `v0.4.0` ставится при приёмке фазы. Новых таблиц нет — admin это чистый
+> API-слой (схема §2.6), audit_log уже создан в Фазе 2.
+
+### Added
+
+- **Admin-каркас** (`core/admin`): `AdminScreen` + `AdminRegistry` — механизм,
+  которым модули/фичи регистрируют admin-экраны (симметрично `register_permissions`
+  / `register_templates`). Экраны монтируются под `/api/admin/{slug}` на старте;
+  `GET /api/admin/screens` (право `admin.screen:read`) возвращает меню — только
+  экраны, на которые у пользователя есть право (`AdminService.screens_for`).
+  Строгая валидация §5.4: у admin-роута обязан быть ровно `require_permission`
+  (`authenticated`/`public` в админке запрещены), проверяется на старте и тестом.
+- **Audit — чтение и ретенция** (`core/audit`): `AuditService.search` (фильтры по
+  action-префиксу, актору, объекту, диапазону дат; пагинация; тенант-скоуп через
+  RLS + явный фильтр). Первый admin-экран — `audit` (`GET /api/admin/audit`,
+  право `audit.record:read`, owner/admin). Ретенция `audit_log` джобой воркера
+  как `app_retention` (OV-27, дефолт 24 мес).
+- **Ретенция служебных таблиц** (закрыты обещания докстрингов «arrives in Phase 4»):
+  `processed_events` (ключи дедупликации старше 30 дней, `app_maintenance`, §2.7) и
+  терминальные PII-строки `notification_outbox` (старше `notification_retention_days`,
+  `app_maintenance`, §2.4 — `recipient` это email/телефон). Все три — одной суточной
+  cron-джобой `purge_retention` (03:00), каждый свип ограничен батчами.
+- Конфиг: `DATABASE_RETENTION_URL` (подключение `app_retention`, только воркер) и
+  `PROCESSED_EVENTS_RETENTION_DAYS`.
+
+### Fixed
+
+- **RLS-политика для `app_retention` на `audit_log`** (миграция `core_audit0002`):
+  базовая ревизия выдала роли грант `SELECT, DELETE`, но политики создала только
+  для `app_user`/`app_maintenance`. При включённом RLS роль без политики видит ноль
+  строк — свип ретенции удалял бы 0 записей. Добавлены `SELECT`/`DELETE`-политики.
+- **Валидация деклараций прав охватывала не все роуты.** В текущей версии FastAPI
+  `include_router` регистрирует ленивый `_IncludedRouter`, поэтому обход
+  `app.routes` с фильтром `isinstance(route, APIRoute)` пропускал все смонтированные
+  роутеры — инвариант «эндпоинт без права не стартует» по факту не применялся в
+  рантайме. Валидатор переписан на `iter_route_contexts` (тот же обход, что у
+  генерации OpenAPI): теперь видны эффективные роуты и их эффективный dependant
+  (route-, router- и include-level зависимости). Добавлен тест на пропуск
+  незадекларированного включённого роутера.
+
 ## [0.3.0] — 2026-07-07 — Фаза 3: Billing + Notifications + i18n
 
 > Тег `v0.3.0` ставится при приёмке фазы.

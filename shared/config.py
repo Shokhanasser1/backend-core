@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     database_maintenance_url: str = (
         "postgresql+asyncpg://app_maintenance:app_maintenance@localhost:5432/backend_core"
     )
+    # app_retention deletes only audit_log rows (schema §3.1); used by the worker's
+    # retention sweep, never by the web process.
+    database_retention_url: str = (
+        "postgresql+asyncpg://app_retention:app_retention@localhost:5432/backend_core"
+    )
 
     redis_url: str = "redis://localhost:6379/0"
 
@@ -60,6 +65,8 @@ class Settings(BaseSettings):
 
     # audit_log retention (OV-27): 24 months default, env-overridable.
     audit_retention_days: int = Field(default=730)
+    # processed_events dedup keys matter only over the bus retry horizon (schema §2.7).
+    processed_events_retention_days: int = 30
 
     # --- billing (Phase 3) ---
     # Enabled payment providers, comma-separated (e.g. "payme,click").

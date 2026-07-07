@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI
 
 from app.config import Settings
 from app.main import create_app
-from app.startup_checks import validate_route_permissions
+from app.startup_checks import validate_admin_routes, validate_route_permissions
 from shared.endpoint_markers import AUTHENTICATED_ATTR, PERMISSION_ATTR, PUBLIC_ATTR
 
 
@@ -80,3 +80,45 @@ def test_router_level_dependency_marker_is_seen(app: FastAPI) -> None:
 
     app.include_router(router)
     validate_route_permissions(app)
+
+
+def test_included_router_without_marker_is_caught(app: FastAPI) -> None:
+    # A router included without a marker must still be flagged — the lazy
+    # _IncludedRouter would otherwise slip past a naive app.routes walk.
+    from fastapi import APIRouter
+
+    router = APIRouter(prefix="/api/widgets")
+
+    @router.get("/unmarked")
+    async def unmarked() -> None: ...
+
+    app.include_router(router)
+    with pytest.raises(RuntimeError, match="/api/widgets/unmarked"):
+        validate_route_permissions(app)
+
+
+# --- admin routes: require_permission only (§5.4) ---
+
+
+def test_base_admin_routes_pass(app: FastAPI) -> None:
+    # The real menu + audit screen both carry require_permission.
+    validate_admin_routes(app)
+
+
+def test_admin_route_with_non_permission_marker_fails(app: FastAPI) -> None:
+    marker = make_marker(AUTHENTICATED_ATTR, "user-scoped")
+
+    @app.get("/api/admin/loose", dependencies=[Depends(marker)])
+    async def loose() -> None: ...
+
+    with pytest.raises(RuntimeError, match="/api/admin/loose"):
+        validate_admin_routes(app)
+
+
+def test_admin_route_with_permission_marker_passes(app: FastAPI) -> None:
+    marker = make_marker(PERMISSION_ATTR, "audit.record:read")
+
+    @app.get("/api/admin/tight", dependencies=[Depends(marker)])
+    async def tight() -> None: ...
+
+    validate_admin_routes(app)

@@ -3,16 +3,23 @@
 Global service table — a sanctioned exception from tenant RLS: contains no
 business data, event_id is globally unique, and platform events (tenant_id
 is None in the envelope) must deduplicate the same way. Rows are written and
-read only by the bus dispatcher; retention sweep arrives in Phase 4.
+read only by the bus dispatcher; the retention sweep (Phase 4) is below.
 """
 
+import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import DateTime, Index, Text, Uuid, func
+from sqlalchemy import DateTime, Index, Text, Uuid, delete, func
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
 
+from shared.config import Settings
 from shared.db import GlobalBase
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessedEvent(GlobalBase):
@@ -27,3 +34,27 @@ class ProcessedEvent(GlobalBase):
     )
 
     __table_args__ = (Index("ix_processed_events_processed_at", "processed_at"),)
+
+
+async def purge_processed_events(
+    maintenance_sessions: async_sessionmaker[AsyncSession],
+    settings: Settings,
+) -> int:
+    """Delete dedup keys older than the retention horizon (schema §2.7).
+
+    They matter only over the bus's retry horizon (a handful of tries with
+    backoff); beyond that they are dead weight. Runs as app_maintenance (the role
+    granted DELETE here); returns the number deleted."""
+    cutoff = datetime.now(UTC) - timedelta(days=settings.processed_events_retention_days)
+    async with maintenance_sessions() as session:
+        result = cast(
+            "CursorResult[Any]",
+            await session.execute(
+                delete(ProcessedEvent).where(ProcessedEvent.processed_at < cutoff)
+            ),
+        )
+        await session.commit()
+    deleted = result.rowcount or 0
+    if deleted:
+        logger.info("purged processed_events", extra={"count": deleted})
+    return deleted
