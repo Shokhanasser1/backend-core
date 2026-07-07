@@ -23,6 +23,8 @@ dependencies = [
     "pyotp>=2.9",
     "cryptography>=44.0",
     "httpx>=0.28",
+    "boto3>=1.35",  # S3-compatible object storage adapter (core/files)
+    "python-multipart>=0.0.12",  # multipart/form-data parsing for file uploads
 ]
 
 [dependency-groups]
@@ -35,6 +37,7 @@ dev = [
     "ruff>=0.8",
     "import-linter>=2.1",
     "pre-commit>=4.0",
+    "moto[s3]>=5.0",  # in-memory S3 mock for the storage adapter test
 ]
 
 [tool.ruff]
@@ -73,6 +76,8 @@ extend-immutable-calls = [
     "fastapi.Path",
     "fastapi.Header",
     "fastapi.Body",
+    "fastapi.File",
+    "fastapi.Form",
 ]
 
 [tool.mypy]
@@ -83,7 +88,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["^\\.venv/"]
 
 [[tool.mypy.overrides]]
-module = ["testcontainers.*"]
+module = ["testcontainers.*", "boto3.*", "botocore.*", "moto.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

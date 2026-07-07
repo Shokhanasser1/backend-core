@@ -5,6 +5,50 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.7.0] — 2026-07-08 — core/files + фича product_images (бэклог v1.1)
+
+> Тег ставится при приёмке. Первый элемент бэклога после V1 (по отдельной команде
+> владельца). Точный номер версии (0.7.0 / v1.1) — на усмотрение владельца при тегировании.
+
+### Added
+
+- **Модуль ядра `core/files`** — тенантное объектное хранилище. Таблица `files`
+  (tenant_id + RLS, ветка Alembic `core_files`): `storage_key`, `content_type`,
+  `byte_size`, `checksum_sha256`, `original_filename`. Байты — в бэкенде за портом
+  `StoragePort`; в Postgres только метаданные.
+  - **Порт + адаптеры:** `FilesystemStorage` (dev/test, без внешнего сервиса) и
+    `S3Storage` (прод, boto3 в потоке + `call_resilient`: таймаут/повторы/circuit
+    breaker); выбор — `FILES_STORAGE_BACKEND`, сборка — `build_storage` (fail-loud
+    при `s3` без кредов, как платёжные провайдеры).
+  - **`FileService`** (публичный интерфейс): `upload` (проверка размера +
+    magic-bytes allowlist — клиентский Content-Type не доверяется; sha256),
+    `get`, `open`, `delete`. События `files.file.uploaded|deleted`.
+  - **Права** `files.file:read|upload|delete` (owner/admin — всё, member — read);
+    роутер `/api/files` (upload multipart, стрим байт inline, meta, delete).
+- **Фича `commerce.product_images`** (requires `commerce.products` + core `files`):
+  привязка изображений к товару (staff, RBAC). Таблица `commerce_product_images`
+  (ветка `commerce_product_images`; `product_id`/`file_id` — «голые» Uuid без
+  межкомпонентных FK, валидируются через `ProductService`/`FileService`). Права
+  `commerce.product_image:read|manage`, события `commerce.product_image.added|removed`,
+  роутер `/api/commerce/product-images` (attach/list/serve/delete).
+- **Зависимости:** `boto3` (S3-адаптер), `python-multipart` (разбор загрузок) —
+  runtime; `moto` — dev (мок S3 для теста адаптера).
+
+### Fixed
+
+- Изоляция тестов: `_clean_db` теперь чистит и Redis (рейт-лимитеры/локауты/
+  эфемерные токены), а не только Postgres — все запросы TestClient идут с одного IP,
+  и per-IP лимит логина (30/60с) иначе протекал между тестами и делал набор
+  зависимым от порядка.
+
+### Security
+
+- Загрузки валидируются по magic bytes (заголовку содержимого), а не по
+  клиентскому Content-Type; allowlist — только растровые картинки (jpeg/png/webp/
+  gif), поэтому SVG/HTML не проходят и inline-отдача XSS-безопасна (глобальный
+  `X-Content-Type-Options: nosniff`). Ключи S3 — только из окружения. Загрузка по
+  URL не вводится, поэтому SSRF-вектор (модель угроз §2) не оживает.
+
 ## [0.6.1] — 2026-07-07 — Проверка боем: фикс add-feature
 
 ### Fixed

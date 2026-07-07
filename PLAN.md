@@ -39,7 +39,7 @@ crm, saas и другие — см. бэклог.
 
 | Что | Содержимое | Ориентир |
 |-----|-----------|----------|
-| core/files + фича product-images | S3-совместимое хранилище, magic bytes, превью | v1.1 |
+| ✅ core/files + фича product_images (построено, ждёт приёмки) | S3/filesystem-хранилище, magic bytes; **превью/тумбнейлы — остаток** | v1.1 |
 | Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов | v1.1 |
 | Модуль saas | Feature flags, лимиты тарифов, usage metering, onboarding | v2 |
 | Модуль crm | Контакты, компании, сделки, воронка, задачи, таймлайн | v2 |
@@ -50,6 +50,32 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-08 — **Бэклог v1.1 (по команде владельца): `core/files` + фича
+  `commerce.product_images` построены — ждут приёмки.** Модуль ядра `core/files`:
+  тенантная таблица `files` (RLS, ветка Alembic `core_files`), порт `StoragePort` +
+  адаптеры `filesystem` (dev/test, без внешнего сервиса) и `s3` (boto3 в потоке +
+  `call_resilient`: таймаут/повторы/circuit breaker; `build_storage` fail-loud при
+  `s3` без кредов). `FileService` (публичный интерфейс): `upload` — валидация
+  размера + **magic-bytes allowlist** (клиентский Content-Type не доверяется) +
+  sha256; `get`/`open`/`delete`; события `files.file.uploaded|deleted`. Права
+  `files.file:read|upload|delete`, роутер `/api/files` (upload multipart, стрим
+  inline, meta, delete). Фича `commerce.product_images` (requires `commerce.products`
+  + core `files`): привязка картинок к товару (staff RBAC), таблица
+  `commerce_product_images` (ветка; `product_id`/`file_id` — «голые» Uuid без
+  межкомпонентных FK, валидация через `ProductService`/`FileService`), события
+  `commerce.product_image.added|removed`, роутер `/api/commerce/product-images`
+  (attach/list/serve/delete). **Wiring:** `app/main` (RBAC + `app.state.file_storage`
+  + роутер), `migrations/env` (`import core.files.models`), `loader.CORE_MODULES +=
+  files`, `shared/config` + `.env.example` (`FILES_*`), `pyproject` (boto3/
+  python-multipart/moto + File/Form в immutable-calls), i18n `errors.storage_error`
+  ru/uz. **Попутный фикс изоляции:** `_clean_db` теперь чистит и Redis — per-IP
+  лимит логина (30/60с) протекал между тестами (один IP у TestClient) и делал набор
+  зависимым от порядка. Проверки: **295 тестов зелёные, покрытие 93.44%**, ruff/mypy
+  strict/import-linter (4 слоя) чисто, миграции всех веток обратимы (+`core_files`,
+  +`commerce_product_images`). **Сознательно не строил** (доп. объём/зависимость —
+  по отдельной команде): генерацию превью/тумбнейлов (нужен Pillow) и пресайн-URL
+  (в v1 отдача стримом через приложение). Осталось для приёмки: подтверждение
+  владельца; затем коммит + тег.
 - 2026-07-07 — **V1 опубликован в origin.** Запушены Фазы 0–6 + проверка боем на
   `github.com/Shokhanasser1/backend-core` (`main` = `1f9babb`, теги `v0.1.0`…`v0.6.1`,
   origin синхронен). Харденинг: добавлен `tests/test_commerce_worker_dispatch.py` —

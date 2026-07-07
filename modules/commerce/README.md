@@ -13,6 +13,7 @@
 | `commerce.products` | Каталог товаров (staff, RBAC) | — |
 | `commerce.cart` | Корзина покупателя (storefront) | `products` |
 | `commerce.orders` | Заказы: оплата, чек, admin-экран | `products` |
+| `commerce.product_images` | Изображения товаров (staff, RBAC) | `products` + core `files` |
 
 Карта зависимостей — DAG: `cart` и `orders` независимы друг от друга, обе тянут
 `products`. Storefront-фичи (`cart`, `orders`) обслуживают покупателя —
@@ -26,6 +27,8 @@
 - **Минимальный магазин:** `products + orders` (покупатель оформляет заказ и
   платит; корзины нет).
 - **Магазин с корзиной:** `products + cart + orders`.
+- **С картинками товаров:** добавить `product_images` к любому из наборов (тянет
+  `products` + core `files`).
 
 Перенос в клиентский проект — `tools/add-feature`, который тянет цепочку `requires`:
 

@@ -19,7 +19,7 @@ from pathlib import Path
 
 # core modules are always present (they are the platform); a feature's
 # requires_core is validated against this set.
-CORE_MODULES = frozenset({"auth", "tenants", "billing", "notifications", "audit", "admin"})
+CORE_MODULES = frozenset({"auth", "tenants", "billing", "notifications", "audit", "admin", "files"})
 
 # Repo root = the directory that holds modules/ (this file is modules/loader.py).
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

@@ -9,6 +9,7 @@
   "errors.external_service_error": "Внешний сервис временно недоступен.",
   "errors.payment_provider_error": "Ошибка платёжного провайдера.",
   "errors.notification_channel_error": "Ошибка канала уведомлений.",
+  "errors.storage_error": "Ошибка хранилища файлов.",
   "errors.webhook_verification_failed": "Проверка подписи вебхука не пройдена.",
   "errors.circuit_open": "Сервис временно недоступен, попробуйте позже."
 }

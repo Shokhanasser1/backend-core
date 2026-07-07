@@ -9,6 +9,7 @@
   "errors.external_service_error": "Tashqi xizmat vaqtincha ishlamayapti.",
   "errors.payment_provider_error": "To'lov provayderi xatosi.",
   "errors.notification_channel_error": "Bildirishnoma kanali xatosi.",
+  "errors.storage_error": "Fayl xotirasi xatosi.",
   "errors.webhook_verification_failed": "Vebhuk imzosini tekshirib bo'lmadi.",
   "errors.circuit_open": "Xizmat vaqtincha ishlamayapti, keyinroq urinib ko'ring."
 }

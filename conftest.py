@@ -117,8 +117,14 @@ def _schema(role_urls: dict[str, str]) -> None:
 
 
 @pytest.fixture
-async def _clean_db(role_urls: dict[str, str], _schema: None) -> None:
-    """Truncate all tables (as owner) before each test for isolation."""
+async def _clean_db(role_urls: dict[str, str], _schema: None, redis_url: str) -> None:
+    """Truncate all tables (as owner) and flush Redis before each test for isolation.
+
+    Redis holds rate-limit counters, lockouts, ephemeral tokens and SMS caps; all
+    TestClient requests share one IP, so a per-IP limiter (e.g. login: 30/60s) would
+    otherwise leak across tests and make the suite order-dependent."""
+    from redis.asyncio import Redis
+
     engine = create_async_engine(role_urls[ROLE_MIGRATOR])
     try:
         async with engine.begin() as connection:
@@ -139,6 +145,12 @@ async def _clean_db(role_urls: dict[str, str], _schema: None) -> None:
                 await connection.execute(text(f"TRUNCATE {joined} RESTART IDENTITY CASCADE"))
     finally:
         await engine.dispose()
+
+    redis = Redis.from_url(redis_url)
+    try:
+        await redis.flushdb()
+    finally:
+        await redis.aclose()
 
 
 @pytest.fixture
@@ -202,7 +214,9 @@ def other_tenant_ctx() -> TenantContext:
 
 
 @pytest.fixture
-def test_settings(role_urls: dict[str, str], redis_url: str) -> Settings:
+def test_settings(
+    role_urls: dict[str, str], redis_url: str, tmp_path_factory: pytest.TempPathFactory
+) -> Settings:
     return Settings(
         _env_file=None,
         app_env="test",
@@ -212,6 +226,9 @@ def test_settings(role_urls: dict[str, str], redis_url: str) -> Settings:
         database_maintenance_url=role_urls[ROLE_MAINTENANCE],
         database_retention_url=role_urls[ROLE_RETENTION],
         redis_url=redis_url,
+        # core/files: filesystem backend rooted in a fresh per-test tmp dir, so
+        # uploads never leak into the repo and never collide across tests.
+        files_filesystem_root=str(tmp_path_factory.mktemp("files")),
     )
 
 

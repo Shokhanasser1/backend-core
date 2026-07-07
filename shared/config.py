@@ -98,6 +98,29 @@ class Settings(BaseSettings):
     eskiz_email: str = ""
     eskiz_password: str = ""
 
+    # --- files (object storage; core/files) ---
+    # Backend selects the storage adapter: "filesystem" (dev/test default, no
+    # external service) or "s3" (S3-compatible, prod). An "s3" backend without
+    # credentials fails loudly at startup (build_storage), like payment providers.
+    files_storage_backend: Literal["filesystem", "s3"] = "filesystem"
+    # Local root for the filesystem backend; empty -> a temp dir. Tests point it
+    # at a per-test tmp dir so uploads never leak into the repo.
+    files_filesystem_root: str = ""
+    files_max_upload_bytes: int = 10 * 1024 * 1024  # 10 MiB cap (threat model)
+    # Server-side content-type allowlist (magic bytes are checked, the client
+    # Content-Type is never trusted). Raster images only — SVG/HTML stay out so
+    # inline serving is XSS-safe.
+    files_allowed_content_types: str = "image/jpeg,image/png,image/webp,image/gif"
+    files_s3_endpoint_url: str = ""  # empty = AWS default; set for MinIO/other
+    files_s3_bucket: str = "backend-core-files"
+    files_s3_region: str = "us-east-1"
+    files_s3_access_key: str = ""
+    files_s3_secret_key: str = ""
+
+    @property
+    def files_allowed_content_type_list(self) -> tuple[str, ...]:
+        return _split_csv(self.files_allowed_content_types)
+
     @property
     def enabled_payment_provider_list(self) -> tuple[str, ...]:
         return _split_csv(self.enabled_payment_providers)

@@ -1,0 +1,10 @@
+name = "commerce.product_images"
+description = "Изображения товаров: загрузка через core/files и привязка к товару (RBAC)."
+requires_features = ["commerce.products"]
+requires_core = ["auth", "tenants", "files"]
+owns_tables = ["commerce_product_images"]
+publishes_events = [
+    "commerce.product_image.added",
+    "commerce.product_image.removed",
+]
+listens_events = []

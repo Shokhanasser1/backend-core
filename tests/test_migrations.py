@@ -86,6 +86,8 @@ def test_upgrade_heads_downgrade_upgrade(
         "commerce_cart_items",
         "commerce_orders",
         "commerce_order_items",
+        "files",
+        "commerce_product_images",
     )
     command.upgrade(config, "heads")
     for table in all_tables:
@@ -109,6 +111,11 @@ def test_upgrade_heads_downgrade_upgrade(
     assert not asyncio.run(_table_exists(migrator_url, "commerce_carts"))
     command.downgrade(config, "commerce_products@base")
     assert not asyncio.run(_table_exists(migrator_url, "commerce_products"))
+    # files-backed branches also FK tenants (RESTRICT) -> drop before core_tenants.
+    command.downgrade(config, "commerce_product_images@base")
+    assert not asyncio.run(_table_exists(migrator_url, "commerce_product_images"))
+    command.downgrade(config, "core_files@base")
+    assert not asyncio.run(_table_exists(migrator_url, "files"))
     command.downgrade(config, "core_tenants@base")
     assert not asyncio.run(_table_exists(migrator_url, "memberships"))
     command.downgrade(config, "core_auth@base")

@@ -1,9 +1,31 @@
-# HANDOFF — состояние проекта после сессии 2026-07-07
+# HANDOFF — состояние проекта после сессии 2026-07-08
 
 Хендофф для следующей сессии/владельца. Источники правды остаются:
 `master-prompt-backend-core.md` (требования), `PLAN.md` (фазы + журнал),
 `CLAUDE.md` (конвенции разработки), `docs/phase0/00-open-questions.md` (реестр
 решений ОВ).
+
+## Обновление 2026-07-08 — бэклог v1.1: core/files + product_images (принято, закоммичено)
+
+Первый элемент бэклога после V1 (по команде владельца). Построены и **закоммичены**:
+
+- **`core/files`** — модуль ядра (как billing, всегда включён): таблица `files`
+  (tenant-RLS, ветка `core_files`), порт `StoragePort` + адаптеры `filesystem`
+  (dev/test) и `s3` (boto3 + resilience; `build_storage` fail-loud при `s3` без
+  кредов). `FileService.upload/get/open/delete` — валидация по **magic bytes**
+  (клиентский Content-Type не доверяется; allowlist растровых картинок → inline
+  XSS-safe), sha256. Права `files.file:*`, роутер `/api/files`.
+- **`commerce.product_images`** (requires products + core files) — привязка картинок
+  к товару (staff RBAC). `commerce_product_images` (product_id/file_id без
+  межкомпонентных FK — валидация через сервисы), `/api/commerce/product-images`.
+- **Зависимости:** boto3 + python-multipart (runtime), moto (dev). **Фикс изоляции
+  тестов:** `_clean_db` чистит и Redis (per-IP лимит логина протекал между тестами).
+- **Не построено (сознательно, доп. объём — по отдельной команде):** превью/
+  тумбнейлы (нужен Pillow) и пресайн-URL; орфаны объектов при краше между put и
+  commit задокументированы (GC — бэклог).
+- Проверки: **295 тестов зелёные, 93.44%**, ruff/mypy strict/import-linter чисто,
+  обратимость веток `core_files`+`commerce_product_images` в `test_migrations.py`.
+  Осталось: решение владельца по тегу (0.7.0 / v1.1) и push в origin.
 
 ## Итог: V1 готов, закалён боем и опубликован
 
@@ -89,7 +111,8 @@ reliable-доставка подписчика фичи через воркер 
 
 1. **Реальный/пилотный клиентский проект** из шаблона (проверка боем на боевом
    бизнесе, а не на синтетическом пилоте) — правки неудобств возвращать в шаблон.
-2. **Бэклог** (только по отдельной команде, `PLAN.md`): core/files + product-images,
+2. **Бэклог** (только по отдельной команде, `PLAN.md`): core/files + product_images
+   ✅ сделано (v1.1, ждёт тега/push); остаётся — превью/тумбнейлы к product_images,
    Stripe-адаптер, модули saas/crm, tg-bot-template, copier-scaffolding.
 3. **Открытые нерешённые ОВ** (не блокируют код): ОВ-28/29/31 — юр-пакет и хостинг
    (решения владельца/юриста, отражены в `docs/DEPLOYMENT.md`).

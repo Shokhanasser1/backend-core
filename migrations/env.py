@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 import core.audit.models
 import core.auth.models
 import core.billing.models
+import core.files.models
 import core.notifications.models
 import core.tenants.models  # noqa: F401  (register tenants models on the metadata)
 import shared.processed_events  # noqa: F401  (register service tables on the metadata)

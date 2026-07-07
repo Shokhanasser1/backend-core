@@ -33,6 +33,9 @@ from core.billing.adapters import build_payment_providers
 from core.billing.api import router as billing_api_router
 from core.billing.permissions import register_billing_rbac
 from core.billing.router import router as billing_webhook_router
+from core.files.adapters import build_storage
+from core.files.permissions import register_files_rbac
+from core.files.router import router as files_router
 from core.tenants.permissions import TENANTS_PERMISSIONS
 from core.tenants.router import router as tenants_router
 from core.tenants.sync import sync_system_roles
@@ -55,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # registers its codes + grants; admin screens register on the registry.
     register_permissions("tenants", TENANTS_PERMISSIONS)
     register_billing_rbac()  # billing permissions + their grants to system roles
+    register_files_rbac()  # files permissions + their grants to system roles
     register_audit_rbac()  # audit.record:read (owner/admin) — audit admin screen
     register_admin_rbac()  # admin.screen:read (owner/admin) — the admin menu
     # The screen registry is rebuilt per app instance (features register per-app).
@@ -88,6 +92,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Enabled payment providers (Payme/Click); the webhook routes read this.
         # A provider enabled without credentials fails loudly here, at startup.
         app.state.payment_providers = build_payment_providers(app_settings)
+        # Object-storage backend for core/files (filesystem/s3). An "s3" backend
+        # without credentials fails loudly here, at startup.
+        app.state.file_storage = build_storage(app_settings)
 
         # Idempotently reconcile system roles + grants (as app_maintenance) and
         # load the currency exponents into the process-global registry (§2.5).
@@ -119,6 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(tenants_router)
     application.include_router(billing_api_router)
     application.include_router(billing_webhook_router)
+    application.include_router(files_router)
     application.include_router(admin_router)  # /api/admin/screens (the menu)
 
     # Business-module features (ENABLED_MODULES): discover, validate requires,
