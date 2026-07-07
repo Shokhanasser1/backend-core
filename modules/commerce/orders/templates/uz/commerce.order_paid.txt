@@ -1,0 +1,1 @@
+Buyurtmangiz $order_id to'landi. Summa: $amount $currency. Xaridingiz uchun rahmat!

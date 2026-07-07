@@ -1,0 +1,16 @@
+name = "commerce.orders"
+description = "Заказы покупателя: оформление, оплата через billing, чек, admin-экран."
+requires_features = ["commerce.products"]
+requires_core = ["auth", "tenants", "billing", "notifications"]
+owns_tables = ["commerce_orders", "commerce_order_items"]
+publishes_events = [
+    "commerce.order.created",
+    "commerce.order.paid",
+    "commerce.order.canceled",
+]
+listens_events = [
+    "billing.payment.succeeded",
+    "billing.payment.failed",
+    "billing.payment.canceled",
+    "billing.payment.expired",
+]

@@ -25,7 +25,7 @@ crm, saas и другие — см. бэклог.
 | 3 | Billing + Notifications + i18n | PaymentProvider (Payme, Click), вебхуки с подписью и идемпотентностью; NotificationChannel (Telegram, Eskiz, email) через очередь; каталоги ru/uz | Негативные тесты вебхуков; уведомления уходят из очереди | ✅ |
 | 4 | Audit + Admin-каркас | Append-only аудит; admin-API с механизмом регистрации экранов модулей | Стандарты фазы + тесты | 🟨 |
 | 5 | CLAUDE.md + документация | Расширить CLAUDE.md конвенциями; README модулей ядра; ADR | Новая сессия Claude работает без этой переписки | 🟨 |
-| 6 | Commerce + конструктор | Фичи products/cart/orders; загрузчик фич (feature.toml, проверка requires на старте); tools/add-feature; README-меню модуля | products переносится в чистый проект и заводится; cart без products валит старт с понятной ошибкой | ⬜ |
+| 6 | Commerce + конструктор | Фичи products/cart/orders; загрузчик фич (feature.toml, проверка requires на старте); tools/add-feature; README-меню модуля | products переносится в чистый проект и заводится; cart без products валит старт с понятной ошибкой | ✅ |
 
 Оценка: ~10–15 рабочих сессий Claude Code.
 
@@ -50,6 +50,49 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-07 — **Фаза 6 завершена — V1 ГОТОВ.** Модуль commerce из трёх фич,
+  собранный строго через публичные интерфейсы ядра (приёмочный тест конструктора).
+  **cart** (`commerce.cart`, requires products): storefront-корзина покупателя
+  (buyer-механизм ОВ-39: `authenticated_endpoint` + магазин из `X-Shop-Tenant` +
+  ownership в сервисе; цены через `ProductService`, не читая таблицу); события
+  `commerce.cart.checked_out`. **orders** (`commerce.orders`, requires products) —
+  сквозной сценарий §6.5: `place_order` оценивает через products, платит через
+  `PaymentService`; reliable-подписчик на `billing.payment.succeeded` помечает
+  оплаченным + шлёт чек `NotificationService` (шаблон `commerce.order_paid` ru/uz) +
+  публикует `commerce.order.paid`; отказные `billing.payment.failed|canceled|expired`
+  → отмена; admin-экран `/api/admin/orders` (`commerce.order:read`). **Механика:**
+  тест честности манифестов (AST: импорты фичи ⊆ requires_features, только публичный
+  пакет), `tools/add-feature` (тянет цепочку requires, копирует папки),
+  приёмочные тесты (products в чистый проект заводится; cart без products валит
+  валидацию с понятной ошибкой), `examples/custom-delivery` (кейс кастомной фичи),
+  README модуля commerce (карта фич + рецепты сборки). Ядро: buyer-механизм
+  `storefront_bundle` в core/auth (ОВ-39); admin_registry сбрасывается per-app +
+  явная регистрация core-экранов (фича-экраны регистрируются загрузчиком);
+  install_module_workers в воркере (reliable-подписчики фич + шаблоны). Конфиг:
+  modules/ в testpaths/mypy/coverage/import-linter, tools/ в mypy/coverage.
+  Проверки: **275 тестов зелёные, покрытие 92.82%**, ruff/mypy strict/import-linter
+  (4 слоя app→modules→core→shared) чисто, миграции всех веток (+3 commerce ветки,
+  upgrade heads + downgrade). Осталось: коммит + тег v0.6.0. → далее «проверка боем»
+  (первый реальный клиентский проект из шаблона).
+- 2026-07-07 — Фаза 6, этап 1 (в работе): механика конструктора + первая фича.
+  Решён **ОВ-39 = (б)** (доступ покупателя: `authenticated_endpoint` + ownership в
+  сервисе). Построен **загрузчик фич** `modules/loader.py` (автодискавери фич-папок
+  ENABLED_MODULES, парсинг `feature.toml`, валидация `requires` на старте с понятной
+  ошибкой, топологический порядок установки) + `app/features.py` (`install_modules`:
+  импорт, install(), монтирование роутеров). Первая фича **commerce.products** (полная
+  анатомия: feature.toml, models с tenant-RLS, schemas, ProductService+repo, permissions
+  commerce.product:*, router `/api/commerce/products`, миграция ветки
+  `commerce_products`, README, тесты в папке фичи). Инфраструктура фич: `modules/` в
+  testpaths/mypy/coverage/import-linter (слои app→modules→core→shared), `conftest.py`
+  перенесён в корень (фича-тесты берут `commerce_client` фикстуру, НЕ импортируют app —
+  граница слоёв). **Попутно:** coverage `concurrency=["thread","greenlet"]` — TestClient
+  крутит приложение в отдельном потоке, без этого HTTP-исполняемый код считался мёртвым
+  (покрытие подскочило 88.9%→93.2% по точности). Проверки: **261 тест зелёный, покрытие
+  93.16%**, ruff/mypy/import-linter чисто, миграции всех веток (+commerce_products,
+  upgrade heads + downgrade). Осталось в Фазе 6: фичи cart+orders (buyer-флоу storefront,
+  платежи/уведомления/события/аудит/admin-экран), тест честности манифестов,
+  tools/add-feature, приёмочные тесты переноса (products в чистый проект; cart без
+  products валит старт), examples/ (кастомная доставка), README модуля commerce.
 - 2026-07-07 — Фаза 5 построена (ждёт приёмки владельцем): документация. Расширен
   `CLAUDE.md` — конвенции именования (таблицы/права/события/миграции/ветки/роли),
   пошаговые how-to (эндпоинт, миграция, модуль ядра, фича, точечные рецепты:

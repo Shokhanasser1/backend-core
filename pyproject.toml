@@ -60,6 +60,10 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S311", "S608"]
+# Feature tests live inside the feature folder (anatomy) — same test relaxations.
+"modules/**/tests/**" = ["S101", "S105", "S106", "S311", "S608"]
+# add-feature is a CLI: printing to stdout is its interface.
+"tools/**" = ["T201"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection idiom requires these calls in argument defaults.
@@ -83,7 +87,10 @@ module = ["testcontainers.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# Feature tests live inside the feature folder (anatomy) and move with it, so
+# modules/ is a test root alongside tests/. The shared fixtures live in the repo
+# root conftest.py so both trees see them.
+testpaths = ["tests", "modules"]
 asyncio_mode = "auto"
 addopts = "-q"
 markers = [
@@ -91,7 +98,10 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["app", "shared"]
+source = ["app", "core", "shared", "modules", "tools"]
+# TestClient runs the app in a worker thread; trace it so code exercised only
+# through HTTP (e.g. a feature's service) is measured, not counted as dead.
+concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
 show_missing = true
@@ -100,18 +110,18 @@ show_missing = true
 exclude_dirs = ["tests", ".venv"]
 
 [tool.importlinter]
-root_packages = ["app", "core", "shared"]
+root_packages = ["app", "modules", "core", "shared"]
 
 [[tool.importlinter.contracts]]
-name = "Слои: app -> core -> shared, только вниз"
+name = "Слои: app -> modules -> core -> shared, только вниз"
 type = "layers"
-layers = ["app", "core", "shared"]
+layers = ["app", "modules", "core", "shared"]
 
 [[tool.importlinter.contracts]]
-name = "core не импортирует app"
+name = "core не импортирует app и modules"
 type = "forbidden"
 source_modules = ["core"]
-forbidden_modules = ["app"]
+forbidden_modules = ["app", "modules"]
 
 [[tool.importlinter.contracts]]
 name = "SystemRepository — только для core/ (app напрямую не тянет)"

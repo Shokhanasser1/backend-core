@@ -24,8 +24,8 @@ jobs:
         run: uv lock --check
       - run: uv run ruff format --check .
       - run: uv run ruff check .
-      - run: uv run mypy app shared migrations tests
-      - name: Контракты импортов (слои app → shared, SystemRepository только для core)
+      - run: uv run mypy app modules tools shared migrations tests
+      - name: Контракты импортов (слои app → modules → core → shared)
         run: uv run lint-imports
 
   test:
@@ -39,7 +39,7 @@ jobs:
       - name: Тесты с покрытием (testcontainers: Postgres 16 + Redis 7)
         run: >
           uv run pytest
-          --cov=app --cov=core --cov=shared
+          --cov=app --cov=core --cov=shared --cov=modules --cov=tools
           --cov-report=term-missing
           --cov-fail-under=85
 

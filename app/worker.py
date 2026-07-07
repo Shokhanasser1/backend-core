@@ -20,6 +20,7 @@ from sqlalchemy.engine import CursorResult
 import core.subscribers  # noqa: F401  (register core subscribers in the worker process)
 from app.config import Settings, get_settings
 from app.db import create_engine, create_session_factory
+from app.features import install_module_workers
 from app.logging_setup import configure_logging
 from app.observability import init_sentry
 from core.audit.retention import purge_expired_audit
@@ -166,6 +167,9 @@ async def on_startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     init_sentry(settings)
+    # Register enabled features' reliable subscribers + notification templates so
+    # their events are resolvable and their receipts renderable in this worker.
+    install_module_workers(settings)
     user_engine = create_engine(settings.database_url)
     maintenance_engine = create_engine(settings.database_maintenance_url)
     retention_engine = create_engine(settings.database_retention_url)

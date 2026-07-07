@@ -18,7 +18,7 @@ test: ## Тесты (интеграционные требуют Docker: testcon
 lint: ## Формат-чек, линт, mypy strict, контракты импортов
 	$(UV) run ruff format --check .
 	$(UV) run ruff check .
-	$(UV) run mypy app shared migrations tests
+	$(UV) run mypy app modules tools shared migrations tests
 	$(UV) run lint-imports
 
 fmt: ## Автоформатирование + автофиксы линта

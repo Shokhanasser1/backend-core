@@ -1,15 +1,15 @@
-"""Central registration of admin screens (mirrors core/subscribers).
+"""Registration of the core admin screens (interfaces §5.4).
 
-Importing this module imports every enabled module's ``admin.py``, whose
-module-level ``admin_registry.register(...)`` populates the registry. The app
-imports this once at startup, then mounts what the registry holds. Business
-modules (commerce, ...) add their screens the same way once enabled (Phase 6);
-they are absent here until then, so nothing to toggle.
+Explicit and re-runnable: ``create_app`` calls ``admin_registry.reset()`` then
+``register_admin_screens()`` on every app instance, so the registry reflects
+exactly this app's screens. Feature screens are registered separately by the
+feature loader (each feature's ``install()``), never here — a disabled module
+contributes nothing.
 """
 
-import core.audit.admin  # noqa: F401  (registers the audit activity-log screen)
+from core.admin.registry import admin_registry
+from core.audit.admin import AUDIT_SCREEN
 
 
 def register_admin_screens() -> None:
-    """Idempotent no-op entry point — importing this module does the work.
-    Exists so call sites read intentionally (`register_admin_screens()`)."""
+    admin_registry.register(AUDIT_SCREEN)

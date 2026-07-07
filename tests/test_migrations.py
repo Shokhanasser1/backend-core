@@ -81,6 +81,11 @@ def test_upgrade_heads_downgrade_upgrade(
         "payments",
         "notification_settings",
         "notification_outbox",
+        "commerce_products",
+        "commerce_carts",
+        "commerce_cart_items",
+        "commerce_orders",
+        "commerce_order_items",
     )
     command.upgrade(config, "heads")
     for table in all_tables:
@@ -97,6 +102,13 @@ def test_upgrade_heads_downgrade_upgrade(
     assert not asyncio.run(_table_exists(migrator_url, "notification_outbox"))
     command.downgrade(config, "core_audit@base")
     assert not asyncio.run(_table_exists(migrator_url, "audit_log"))
+    # commerce_* FK tenants (RESTRICT), so their branches downgrade before tenants.
+    command.downgrade(config, "commerce_orders@base")
+    assert not asyncio.run(_table_exists(migrator_url, "commerce_orders"))
+    command.downgrade(config, "commerce_cart@base")
+    assert not asyncio.run(_table_exists(migrator_url, "commerce_carts"))
+    command.downgrade(config, "commerce_products@base")
+    assert not asyncio.run(_table_exists(migrator_url, "commerce_products"))
     command.downgrade(config, "core_tenants@base")
     assert not asyncio.run(_table_exists(migrator_url, "memberships"))
     command.downgrade(config, "core_auth@base")

@@ -1,0 +1,11 @@
+name = "commerce.products"
+description = "Каталог товаров: управление персоналом тенанта (RBAC)."
+requires_features = []
+requires_core = ["auth", "tenants"]
+owns_tables = ["commerce_products"]
+publishes_events = [
+    "commerce.product.created",
+    "commerce.product.updated",
+    "commerce.product.archived",
+]
+listens_events = []

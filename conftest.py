@@ -220,3 +220,66 @@ def client(test_settings: Settings, _clean_db: None) -> Iterator[TestClient]:
     application = create_app(test_settings)
     with TestClient(application) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def commerce_client(
+    test_settings: Settings, role_urls: dict[str, str], _clean_db: None
+) -> Iterator[TestClient]:
+    """A TestClient with ENABLED_MODULES=commerce and a seeded UZS currency.
+
+    Lives in the root conftest (not under modules/) so feature tests get a running
+    app WITHOUT importing app.* — that would violate the modules -> app layer
+    boundary (import-linter). commerce.products validates prices against the
+    currency registry, loaded at lifespan from the currencies table."""
+
+    async def _seed() -> None:
+        engine = create_async_engine(role_urls[ROLE_MIGRATOR])
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO currencies (code, exponent, name) VALUES ('UZS', 0, 'Som') "
+                        "ON CONFLICT (code) DO NOTHING"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+    application = create_app(test_settings.model_copy(update={"enabled_modules": "commerce"}))
+    with TestClient(application) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def commerce_payments_client(
+    test_settings: Settings, role_urls: dict[str, str], _clean_db: None
+) -> Iterator[TestClient]:
+    """commerce_client + Payme enabled — orders need a payment provider to checkout."""
+
+    async def _seed() -> None:
+        engine = create_async_engine(role_urls[ROLE_MIGRATOR])
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO currencies (code, exponent, name) VALUES ('UZS', 0, 'Som') "
+                        "ON CONFLICT (code) DO NOTHING"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+    settings = test_settings.model_copy(
+        update={
+            "enabled_modules": "commerce",
+            "enabled_payment_providers": "payme",
+            "payme_merchant_id": "merchant-1",
+            "payme_merchant_key": "test-merchant-key",
+        }
+    )
+    application = create_app(settings)
+    with TestClient(application) as test_client:
+        yield test_client

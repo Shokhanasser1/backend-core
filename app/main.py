@@ -15,6 +15,7 @@ import core.subscribers  # noqa: F401  (register core event subscribers on the b
 from app.admin_screens import mount_admin_screens
 from app.config import Settings, get_settings
 from app.db import Database
+from app.features import install_modules
 from app.logging_setup import configure_logging
 from app.middleware import MetricsMiddleware, RequestIDMiddleware, SecurityHeadersMiddleware
 from app.observability import init_sentry
@@ -22,6 +23,7 @@ from app.redis_client import create_redis
 from app.routes import router as infra_router
 from app.startup_checks import validate_admin_routes, validate_route_permissions
 from core.admin.permissions import register_admin_rbac
+from core.admin.registry import admin_registry
 from core.admin.router import router as admin_router
 from core.admin.screens import register_admin_screens
 from core.audit.permissions import register_audit_rbac
@@ -55,7 +57,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_billing_rbac()  # billing permissions + their grants to system roles
     register_audit_rbac()  # audit.record:read (owner/admin) — audit admin screen
     register_admin_rbac()  # admin.screen:read (owner/admin) — the admin menu
-    register_admin_screens()  # import module admin.py files -> populate the registry
+    # The screen registry is rebuilt per app instance (features register per-app).
+    admin_registry.reset()
+    register_admin_screens()  # core screens; feature screens are added by the loader
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -116,7 +120,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(billing_api_router)
     application.include_router(billing_webhook_router)
     application.include_router(admin_router)  # /api/admin/screens (the menu)
-    mount_admin_screens(application)  # /api/admin/{slug} for each registered screen
+
+    # Business-module features (ENABLED_MODULES): discover, validate requires,
+    # install RBAC + admin screens + mount routers. A feature with an unmet
+    # requires fails here. Runs before mount_admin_screens so feature admin
+    # screens (registered in install()) are mounted too.
+    install_modules(application, app_settings)
+
+    mount_admin_screens(application)  # /api/admin/{slug} for every registered screen
 
     @application.exception_handler(DomainError)
     async def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:

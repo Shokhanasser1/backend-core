@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from core.admin.registry import AdminScreen, admin_registry
+from core.admin.registry import AdminScreen
 from core.audit import permissions as perms
 from core.audit.schemas import AuditQuery, AuditRecordDTO
 from core.auth.deps import ServiceBundle, authed_bundle, require_permission
@@ -44,6 +44,9 @@ async def search_audit(
     return await bundle.audit.search(query, Page(limit=limit, offset=offset))
 
 
+# Defined here (owned by audit) but registered by core/admin/screens.py, which is
+# re-run per app instance after admin_registry.reset() — so the registry reflects
+# exactly the current app's screens (core + enabled features), never a prior app's.
 AUDIT_SCREEN = AdminScreen(
     slug="audit",
     title_key="admin.screen.audit",
@@ -51,4 +54,3 @@ AUDIT_SCREEN = AdminScreen(
     router=router,
     permission=perms.RECORD_READ,
 )
-admin_registry.register(AUDIT_SCREEN)

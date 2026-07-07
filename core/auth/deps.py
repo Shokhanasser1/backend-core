@@ -24,7 +24,7 @@ from core.auth.service import AuthService
 from core.tenants.service import TenantService
 from shared.context import Actor, RequestContext, TenantContext
 from shared.endpoint_markers import AUTHENTICATED_ATTR, PERMISSION_ATTR, PUBLIC_ATTR
-from shared.errors import AuthenticationError, PermissionDeniedError
+from shared.errors import AuthenticationError, InvariantViolationError, PermissionDeniedError
 from shared.service import SqlAlchemyUnitOfWork, UnitOfWork
 
 
@@ -137,6 +137,37 @@ async def maintenance_bundle(request: Request) -> AsyncIterator[ServiceBundle]:
     """Authenticated user + maintenance UoW: create_tenant / accept_invitation."""
     ctx = _context_from_request(request, require_auth=True)
     async for bundle in _open_bundle(request, ctx, maintenance=True):
+        yield bundle
+
+
+def _storefront_context(request: Request) -> TenantContext:
+    """Storefront (buyer) context: actor from the JWT, tenant from the shop the
+    buyer is browsing (X-Shop-Tenant header) — the buyer is authenticated but NOT
+    a member of the shop's tenant (decision OV-39). RLS then scopes reads/writes to
+    that shop; the feature's service enforces per-object ownership
+    (``customer_user_id == ctx.actor.id``) as the second line."""
+    request_id = getattr(request.state, "request_id", None)
+    token = _bearer_token(request)
+    if token is None:
+        raise AuthenticationError("missing bearer token")
+    claims = decode_access_token(token, request.app.state.settings)
+    shop_raw = request.headers.get("x-shop-tenant")
+    if not shop_raw:
+        raise InvariantViolationError("X-Shop-Tenant header is required for storefront access")
+    try:
+        shop = UUID(shop_raw)
+    except ValueError as exc:
+        raise InvariantViolationError("X-Shop-Tenant must be a tenant UUID") from exc
+    return TenantContext(
+        tenant_id=shop, actor=Actor(kind="user", id=claims["sub"]), request_id=request_id
+    )
+
+
+async def storefront_bundle(request: Request) -> AsyncIterator[ServiceBundle]:
+    """Buyer-scoped bundle: authenticated actor + the shop tenant from the request
+    (OV-39). Paired with the ``authenticated_endpoint`` marker on storefront routes."""
+    ctx = _storefront_context(request)
+    async for bundle in _open_bundle(request, ctx, maintenance=False):
         yield bundle
 
 

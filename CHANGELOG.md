@@ -5,6 +5,55 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.6.0] — 2026-07-07 — Фаза 6: Commerce + механика конструктора (V1 готов)
+
+> Тег `v0.6.0` ставится при приёмке фазы. Завершает V1: ядро + первый модуль +
+> механика сборки из фич.
+
+### Added
+
+- **Загрузчик фич** (`modules/loader.py` + `app/features.py`): автодискавери
+  фич-папок `ENABLED_MODULES`, парсинг `feature.toml`, валидация `requires` на
+  старте с понятной ошибкой, топологический порядок установки. `install_modules`
+  (web: install + монтирование роутеров), `install_module_workers` (воркер:
+  reliable-подписчики фич + шаблоны уведомлений).
+- **Модуль commerce** из трёх фич, собранных через публичные интерфейсы ядра:
+  - `commerce.products` — каталог (staff RBAC `commerce.product:*`, события
+    `commerce.product.*`, `ProductService.get_sale_info` для соседей);
+  - `commerce.cart` (requires products) — storefront-корзина покупателя,
+    `commerce.cart.checked_out`;
+  - `commerce.orders` (requires products) — заказ → оплата через `PaymentService`
+    → reliable-подписчик на `billing.payment.succeeded` (пометка оплачен + чек
+    `commerce.order_paid` ru/uz + `commerce.order.paid`) → admin-экран
+    `/api/admin/orders` (`commerce.order:read`); отказные ветки отменяют заказ.
+- **Buyer-механизм storefront** (ОВ-39): `storefront_bundle` в `core/auth/deps.py`
+  — аутентифицированный покупатель (не член тенанта), магазин из заголовка
+  `X-Shop-Tenant`, ownership по `customer_user_id` в сервисе.
+- **Тест честности манифестов** (`tests/test_manifest_honesty.py`): AST-скан —
+  импорты фичи ⊆ `requires_features`, только через публичный пакет соседа.
+- **`tools/add-feature`**: копирует фичу и её цепочку `requires` в проект.
+- **Приёмочные тесты конструктора** (`tests/test_feature_transfer.py`): products
+  переносится и заводится в одиночку; cart без products валит валидацию понятной
+  ошибкой.
+- **`examples/custom-delivery`** — кейс кастомной фичи (диф, решения, чек-лист);
+  README модуля `modules/commerce/README.md` (карта фич + рецепты сборки).
+
+### Changed
+
+- `admin_registry` пересобирается per-app (reset + явная регистрация core-экранов);
+  admin-экраны фич регистрирует загрузчик — так меню отражает ровно включённые
+  модули. `install_modules` монтируется до `mount_admin_screens`.
+- `modules/` в testpaths / mypy / import-linter (слои `app → modules → core →
+  shared`) / coverage; `tools/` в mypy / coverage. `conftest.py` перенесён в корень
+  (фича-тесты берут фикстуры `commerce_client`/`commerce_payments_client`).
+- **coverage `concurrency=["thread","greenlet"]`** — TestClient крутит приложение
+  в отдельном потоке; без этого HTTP-исполняемый код считался непокрытым.
+
+### Upgrade notes
+
+- Три новые ветки миграций (`commerce_products`, `commerce_cart`, `commerce_orders`)
+  — накат `upgrade heads`. Включение модуля: `ENABLED_MODULES=commerce`.
+
 ## [0.5.0] — 2026-07-07 — Фаза 5: CLAUDE.md + документация
 
 > Тег `v0.5.0` ставится при приёмке фазы. Только документация — кода/схемы не
