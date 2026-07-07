@@ -5,9 +5,12 @@
 **ядро → модули → фичи** (ADR-0004). Это не приложение, а starter kit, из
 которого клонированием собираются клиентские проекты (ADR-0009).
 
-**Статус:** Фаза 1 (скелет и инфраструктура). Ядро (auth, tenants, billing,
-notifications, audit, admin) строится в Фазах 2–4, модуль commerce — в
-Фазе 6. План и статусы — `PLAN.md`; требования — `master-prompt-backend-core.md`.
+**Статус:** ядро построено (Фазы 0–4, теги `v0.1.0`…`v0.4.0`): auth, tenants,
+billing (Payme/Click), notifications (Telegram/Eskiz/SMTP), audit, admin-каркас,
+i18n (ru/uz). Идёт Фаза 5 (документация); дальше — модуль commerce и загрузчик
+фич (Фаза 6). Конвенции разработки — `CLAUDE.md`; у каждого модуля ядра —
+`core/<module>/README.md`; продакшен — `docs/DEPLOYMENT.md`. План и статусы —
+`PLAN.md`; требования — `master-prompt-backend-core.md`.
 
 ## Стек
 
