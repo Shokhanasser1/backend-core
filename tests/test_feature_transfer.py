@@ -55,6 +55,18 @@ def test_cart_without_products_fails_with_clear_error(tmp_path: Path) -> None:
         validate_dependencies(manifests)
 
 
+def test_add_feature_skips_already_satisfied_dependency(tmp_path: Path) -> None:
+    # Incremental adds: 'cart' after 'orders' both need products — the shared
+    # dependency is already installed and must be skipped, not re-copied/errored.
+    add_feature("commerce.orders", tmp_path)  # products + orders
+    copied = add_feature("commerce.cart", tmp_path)
+    assert copied == ["commerce.cart"]  # products satisfied -> skipped
+
+    manifests = discover_manifests(_COMMERCE, project_root=tmp_path)
+    assert set(manifests) == {"commerce.products", "commerce.cart", "commerce.orders"}
+    validate_dependencies(manifests)
+
+
 def test_add_feature_refuses_to_overwrite(tmp_path: Path) -> None:
     add_feature("commerce.products", tmp_path)
     with pytest.raises(FeatureError, match="already exists"):

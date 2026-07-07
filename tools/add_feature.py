@@ -61,19 +61,30 @@ def add_feature(
     feature: str, target_root: Path, *, force: bool = False, source_root: Path = PROJECT_ROOT
 ) -> list[str]:
     """Copy ``feature`` and its requires chain into ``target_root``. Returns the
-    copied feature names in install order."""
+    feature names actually copied, in install order.
+
+    A dependency already present in the target is treated as satisfied and skipped
+    (so adding features incrementally — ``add cart`` after ``add orders``, both
+    needing products — does not error on the shared dependency). The explicitly
+    requested feature, in contrast, is not silently overwritten: it errors unless
+    ``force`` is set, so a client never loses local changes to the thing they asked
+    to (re)add."""
     manifests = discover_manifests(_module_names(source_root), project_root=source_root)
     chain = _resolve_chain(feature, manifests)
+    copied: list[str] = []
     for name in chain:
         manifest = manifests[name]
         dest = target_root / "modules" / manifest.module / manifest.feature
         if dest.exists():
-            if not force:
+            if name == feature and not force:
                 raise FeatureError(f"{dest} already exists (use --force to overwrite)")
+            if name != feature and not force:
+                continue  # a dependency already installed — satisfied, leave it be
             shutil.rmtree(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(manifest.path, dest, ignore=_IGNORE)
-    return chain
+        copied.append(name)
+    return copied
 
 
 def main(argv: Sequence[str] | None = None) -> int:
