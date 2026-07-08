@@ -270,6 +270,22 @@ def commerce_client(
 
 
 @pytest.fixture
+def saas_client(
+    test_settings: Settings, role_urls: dict[str, str], _clean_db: None
+) -> Iterator[TestClient]:
+    """A TestClient with ENABLED_MODULES=saas, so the loader mounts the saas
+    feature routers and registers their RBAC + bus subscribers.
+
+    Lives in the root conftest (not under modules/) so feature tests get a running
+    app WITHOUT importing app.* — that would violate the modules -> app layer
+    boundary (import-linter). No currency seed is needed (entitlements does not
+    touch billing's currency registry)."""
+    application = create_app(test_settings.model_copy(update={"enabled_modules": "saas"}))
+    with TestClient(application) as test_client:
+        yield test_client
+
+
+@pytest.fixture
 def commerce_payments_client(
     test_settings: Settings, role_urls: dict[str, str], _clean_db: None
 ) -> Iterator[TestClient]:

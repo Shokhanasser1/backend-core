@@ -7,16 +7,58 @@
 
 ## ⚑ Актуальное состояние и следующий шаг (читать первым)
 
-- **Голова:** `main` = `dd85579`, последний тег **`v0.8.0`** (Stripe-адаптер).
-  Origin синхронен (`github.com/Shokhanasser1/backend-core`). Рабочее дерево
-  чистое. **329 тестов зелёные, покрытие 93.88%**, ruff/mypy strict/import-linter
-  чисто, миграции всех веток обратимы.
-- **Готово:** V1 (ядро + commerce + конструктор, теги `v0.1.0`…`v0.6.1`) + **все
-  три элемента бэклога v1.1**: `core/files`+`commerce.product_images` (`v0.7.0`),
-  превью/тумбнейлы (`v0.7.1`), Stripe-адаптер (`v0.8.0`).
-- **СЛЕДУЮЩИЙ ШАГ (решение владельца, эта сессия закрыта под clear): строим модуль
-  `saas`** — элемент бэклога v2: feature flags, лимиты тарифов, usage metering,
-  onboarding. Детали ниже в «## Что дальше → модуль saas».
+- **Голова:** последний тег **`v0.9.0`** — фича `saas.entitlements` ПРИНЯТА,
+  закоммичена, запушена в origin (`github.com/Shokhanasser1/backend-core`). Рабочее
+  дерево чистое. **336 тестов зелёные (+7), покрытие 94.04%**, ruff/mypy strict/
+  import-linter чисто, миграции всех веток обратимы (+`saas_entitlements`).
+- **Готово:** V1 (ядро + commerce + конструктор, теги `v0.1.0`…`v0.6.1`) + все три
+  элемента бэклога v1.1 (`v0.7.0`/`v0.7.1`/`v0.8.0`) + `saas.entitlements` (`v0.9.0`).
+- **СЛЕДУЮЩИЙ ШАГ:** **этап 2 модуля `saas` — фича `saas.metering`** (учёт
+  потребления по событиям шины → агрегаты в БД). Затем этап 3 — `saas.onboarding`
+  (чек-лист активации). Детали и утверждённые решения — в «## Модуль saas → этап 1
+  построен» и «## Что дальше → модуль saas».
+
+## Модуль saas → этап 1: saas.entitlements (ПРИНЯТ, тег v0.9.0, запушен)
+
+Решения Фаза-0-стиля **утверждены владельцем**: saas — бизнес-модуль из фич (как
+commerce); saas владеет справочником план→лимиты; metering = события→агрегаты в БД
+(позже); onboarding = чек-лист (позже); строим по одной фиче с приёмкой. Состав
+модуля — **3 независимые фичи**: `entitlements` (построена), `metering`,
+`onboarding` (далее).
+
+- **`saas.entitlements`** (`modules/saas/entitlements/`, requires core
+  auth/tenants/billing) — права тарифа = feature flags + числовые лимиты.
+  - **Таблицы:** `saas_plan_entitlements` — **глобальный** справочник тарифной
+    сетки (`(plan_code, entitlement_key)`, `kind∈{flag,limit}`,
+    `bool_value`/`int_value`); read-only в рантайме (GRANT SELECT), наполняется
+    seed-миграцией клиента; `plan_code` — «голый» код плана billing без FK.
+    `saas_tenant_entitlements` — **тенантная** (RLS, ветка `saas_entitlements`):
+    активный `plan_code`+`current_period_end`+`canceled`, одна строка на тенант.
+  - **`EntitlementService`** (публичный интерфейс): `is_enabled`/`get_limit`/
+    `require_within_limit` (409 `ConflictError`)/`snapshot`/`effective_plan_code`.
+  - **Подписчики** (reliable, app_user): `billing.subscription.activated`→активный
+    план; `.canceled`→пометка отмены (покрытие до конца периода). Публикует
+    `saas.entitlement.changed`. Роут `GET /api/saas/entitlements/me`
+    (`saas.entitlement:read`, owner/admin).
+- **Решения (чтобы не переоткрывать):**
+  - **Лимиты enforce'ит вызывающая бизнес-фича** через сервис (передаёт свой
+    `current_count`). **metering и entitlements независимы** (не связаны requires).
+    Если позже нужны «лимиты на потребление за период» —
+    `require_within_limit` для таких ключей читал бы значение из metering (тогда
+    `entitlements requires metering`). По умолчанию — независимо.
+  - **Дефолт:** нет активного плана / ключа в сетке → флаг `False`, лимит `None`
+    (безлимит). Включение фичи не блокирует тенанта; жёсткий пол = free-план billing
+    с явными лимитами.
+  - **Новой `DomainError` НЕ вводить** — переиспользован `ConflictError`. Тест
+    паритета i18n (`tests/test_i18n_errors.py`) строго сверяет дерево `DomainError`
+    с ключами ru/uz, а `modules/` грузится лениво → своя ошибка в фиче хрупка
+    (её ключ то есть, то нет в дереве в зависимости от порядка тестов). Новая
+    типизированная ошибка — только в `shared`/`core` (всегда импортированы).
+  - **Тесты через отдельный engine на вызов:** прямые сервис-хелперы в фича-тесте
+    создают/уничтожают свой engine внутри каждого `asyncio.run` — переиспользовать
+    один engine между `asyncio.run` нельзя (пул asyncpg привяжется к закрытому
+    циклу). Шина enqueue глушится (`bus.bind_enqueue` no-op), иначе cross-loop
+    публикация `saas.entitlement.changed` шумит.
 
 ## Обновление 2026-07-08 (3) — Stripe-адаптер (принято, тег `v0.8.0`, запушено)
 

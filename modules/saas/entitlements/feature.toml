@@ -1,0 +1,10 @@
+name = "saas.entitlements"
+description = "Права тарифа (feature flags + числовые лимиты) и активный набор тенанта."
+requires_features = []
+requires_core = ["auth", "tenants", "billing"]
+owns_tables = ["saas_plan_entitlements", "saas_tenant_entitlements"]
+publishes_events = ["saas.entitlement.changed"]
+listens_events = [
+    "billing.subscription.activated",
+    "billing.subscription.canceled",
+]

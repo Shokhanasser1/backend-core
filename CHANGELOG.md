@@ -5,6 +5,50 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.9.0] — 2026-07-08 — Модуль saas, этап 1: saas.entitlements (бэклог v2)
+
+> Второй бизнес-модуль после commerce. Строится по одной фиче; первая —
+> `saas.entitlements` (права тарифа). Построен по команде владельца после
+> Фаза-0-стиль согласования решений. Принято; помечено тегом `v0.9.0`.
+
+### Added
+
+- **Модуль `saas`** (`modules/saas/`, `ENABLED_MODULES=saas`) — набор инструментов
+  SaaS-платформы поверх ядра, собирается из фич как `commerce`. README-меню модуля
+  (карта фич + рецепты + план: `metering`, `onboarding` — далее).
+- **Фича `saas.entitlements`** — права тарифа: **feature flags** (булевы) +
+  **числовые лимиты** плана и активный набор тенанта. `requires_core = auth,
+  tenants, billing`; горизонтально независима (`requires_features = []`).
+- **`EntitlementService`** (публичный интерфейс, §1.2): `is_enabled(flag)`,
+  `get_limit(key) -> int | None`, `require_within_limit(key, current_count)`
+  (кидает `ConflictError`/409, если создание превысит лимит; `current_count` — до
+  нового объекта), `snapshot()` (для `GET /me`), `effective_plan_code()`. Соседние
+  бизнес-фичи enforce'ят лимиты тарифа вызовом сервиса, не читая таблицы saas.
+- **Таблицы:** `saas_plan_entitlements` — **глобальный** справочник тарифной сетки
+  (`(plan_code, entitlement_key)`, `kind∈{flag,limit}`, `bool_value`/`int_value`;
+  read-only в рантайме, наполняется seed-миграцией клиента; `plan_code` — «голый»
+  код плана billing без межкомпонентного FK). `saas_tenant_entitlements` —
+  **тенантная** (RLS, ветка Alembic `saas_entitlements`): активный `plan_code`,
+  `current_period_end`, `canceled`; одна строка на тенант.
+- **Подписчики шины** (reliable, как app_user): `billing.subscription.activated`
+  (`{subscription_id, plan_code, current_period_end}`) → ставит активный план;
+  `billing.subscription.canceled` → помечает отмену (покрытие держится до конца
+  оплаченного периода — cancel-at-period-end). Публикует `saas.entitlement.changed`.
+- **Право** `saas.entitlement:read` (owner/admin) + роут
+  `GET /api/saas/entitlements/me` — обзор entitlements тенанта.
+
+### Notes
+
+- **Дефолт (осознанный, документирован):** нет активного плана (нет подписки /
+  отменённая после конца периода) или ключа в сетке → флаг `False`, лимит `None`
+  (безлимит). Включение фичи не блокирует тенанта целиком; жёсткий пол задаётся
+  выдачей всем free-плана billing с явными лимитами.
+- **Metering и entitlements независимы:** enforcement числовых лимитов делает
+  вызывающая бизнес-фича, передавая свой счётчик. Usage-metering — отдельная фича
+  (следующий этап).
+- Новой `DomainError` не вводили — переиспользован `ConflictError` (тест паритета
+  i18n строго сверяет дерево ошибок, а фичи грузятся лениво).
+
 ## [0.8.0] — 2026-07-08 — Stripe-адаптер (бэклог v1.1)
 
 > Третий `PaymentProvider` для зарубежных клиентов (Payme/Click — UZS). Построен

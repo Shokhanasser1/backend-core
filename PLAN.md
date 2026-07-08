@@ -42,7 +42,7 @@ crm, saas и другие — см. бэклог.
 | ✅ core/files + фича product_images | S3/filesystem-хранилище, magic bytes | v1.1 (тег `v0.7.0`) |
 | ✅ Превью/тумбнейлы к product_images | Pillow за портом `ThumbnailPort`, синхронно при attach, `?size=thumb` | продолжение v1.1 (тег `v0.7.1`) |
 | ✅ Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов (сервер→сервер checkout, подписанные вебхуки) | v1.1 (тег `v0.8.0`) |
-| Модуль saas | Feature flags, лимиты тарифов, usage metering, onboarding | v2 |
+| Модуль saas (в работе) | ✅ `saas.entitlements` (feature flags + лимиты тарифа); далее `metering`, `onboarding` | v2 |
 | Модуль crm | Контакты, компании, сделки, воронка, задачи, таймлайн | v2 |
 | tg-bot-template | Sibling-шаблон: aiogram поверх API этого же ядра | отдельный репозиторий |
 | Идеи будущих модулей | booking (записи: клиники, салоны, курсы), delivery, loyalty | по спросу клиентов |
@@ -51,6 +51,38 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-08 — **Модуль `saas`, этап 1 — фича `saas.entitlements` ПРИНЯТА,
+  закоммичена, тег `v0.9.0`.** Второй бизнес-модуль после commerce (бэклог v2); решения
+  Фазы-0-стиля утверждены владельцем: saas — бизнес-модуль из фич (как commerce);
+  saas владеет справочником план→лимиты; metering — события→агрегаты (позже);
+  onboarding — чек-лист (позже); строим по одной фиче. **Состав модуля** (3
+  независимые фичи): `entitlements` (эта), далее `metering`, `onboarding`.
+  **`saas.entitlements`** (requires core auth/tenants/billing; полная анатомия
+  фичи): права тарифа = feature flags + числовые лимиты. Таблицы —
+  `saas_plan_entitlements` (**глобальный** справочник тарифной сетки: `(plan_code,
+  entitlement_key)`, `kind∈{flag,limit}`, read-only в рантайме, наполняется
+  seed-миграцией клиента) и `saas_tenant_entitlements` (**тенантная**, RLS,
+  ветка Alembic `saas_entitlements`: активный `plan_code`+`current_period_end`+
+  `canceled`, одна строка на тенант). **`EntitlementService`** (публичный интерфейс
+  для соседей): `is_enabled`/`get_limit`/`require_within_limit` (кидает
+  `ConflictError` 409)/`snapshot`/`effective_plan_code`. **Подписчики** (reliable,
+  как app_user): `billing.subscription.activated`→set active plan,
+  `.canceled`→пометка отмены (покрытие держится до `current_period_end` —
+  cancel-at-period-end); публикует `saas.entitlement.changed`. Роут
+  `GET /api/saas/entitlements/me` (`saas.entitlement:read`, owner/admin). **Дефолт
+  (осознанный):** нет активного плана / ключа в сетке → флаг `False`, лимит `None`
+  (безлимит) — включение фичи не блокирует тенанта целиком; жёсткий пол = free-план
+  billing с явными лимитами. **Решения (чтобы не переоткрывать):** (1) лимиты
+  enforce'ит вызывающая бизнес-фича через сервис (передаёт свой `current_count`),
+  metering и entitlements независимы; (2) новой `DomainError` НЕ вводил
+  (переиспользую `ConflictError`) — тест паритета i18n строго сверяет дерево ошибок,
+  а `modules/` грузится лениво → своя ошибка в фиче хрупка. **Обвязка:** фикстура
+  `saas_client`; тест reliable-доставки через реальный воркер
+  (`tests/test_saas_entitlements_dispatch.py`); README модуля + фичи; `.env.example`
+  комментарий `ENABLED_MODULES`. Проверки: **336 тестов зелёные (+7), покрытие
+  94.04%**, ruff/mypy strict/import-linter чисто, миграции всех веток обратимы
+  (+`saas_entitlements`). Принято, закоммичено, помечено тегом `v0.9.0`. → далее
+  этап 2: `saas.metering`.
 - 2026-07-08 — **Stripe-адаптер (бэклог v1.1, по команде владельца) — ПРИНЯТ,
   закоммичен, тег `v0.8.0`, запушен в origin.** Третий `PaymentProvider` для
   зарубежных клиентов.
