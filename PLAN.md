@@ -39,7 +39,8 @@ crm, saas и другие — см. бэклог.
 
 | Что | Содержимое | Ориентир |
 |-----|-----------|----------|
-| ✅ core/files + фича product_images (построено, ждёт приёмки) | S3/filesystem-хранилище, magic bytes; **превью/тумбнейлы — остаток** | v1.1 |
+| ✅ core/files + фича product_images | S3/filesystem-хранилище, magic bytes | v1.1 (тег `v0.7.0`) |
+| ✅ Превью/тумбнейлы к product_images | Pillow за портом `ThumbnailPort`, синхронно при attach, `?size=thumb` | продолжение v1.1 (тег `v0.7.1`) |
 | Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов | v1.1 |
 | Модуль saas | Feature flags, лимиты тарифов, usage metering, onboarding | v2 |
 | Модуль crm | Контакты, компании, сделки, воронка, задачи, таймлайн | v2 |
@@ -50,6 +51,22 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-08 — **Превью/тумбнейлы к `commerce.product_images` (по команде владельца,
+  продолжение v1.1) — приняты, закоммичены, тег `v0.7.1`.** В `core/files` добавлен порт
+  `ThumbnailPort` + адаптер `PillowThumbnailer` (resize по большей стороне, strip
+  EXIF/ICC, кадр GIF → PNG; выход — в растровом allowlist), сборка `build_thumbnailer`
+  в `app.state`. `FileService.create_thumbnail(source_file_id, *, max_edge=None)`
+  кладёт превью **отдельным** файлом (своя строка + ключ), прогоняя байты через тот
+  же magic-bytes allowlist; битая картинка (прошла sniff, но не декодируется) → 422.
+  Фича: колонка `thumbnail_file_id` (ветка `commerce_product_images0002`), `attach`
+  синхронно генерит превью (событие `added` несёт `thumbnail_file_id`), отдача
+  `GET /{id}/content?size=original|thumb` (`thumb` с фолбэком), `remove` чистит оба
+  файла. **Дизайн-решение (утв. владельцем):** генерация синхронная (staff-only,
+  низкая нагрузка) — за портом, при желании выносится в воркер без смены API.
+  Настройка `FILES_THUMBNAIL_MAX_EDGE` (256). Зависимость `pillow` (runtime).
+  Проверки: **305 тестов зелёные, покрытие 93.56%**, ruff/mypy strict/import-linter
+  чисто; новый код покрыт (Pillow-адаптер 100%, `create_thumbnail`, сервис фичи 100%).
+  Принято, закоммичено, помечено тегом `v0.7.1`.
 - 2026-07-08 — **Бэклог v1.1 (по команде владельца): `core/files` + фича
   `commerce.product_images` построены — ждут приёмки.** Модуль ядра `core/files`:
   тенантная таблица `files` (RLS, ветка Alembic `core_files`), порт `StoragePort` +

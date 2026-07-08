@@ -22,6 +22,8 @@ class ProductImage(TimestampMixin, TenantScopedBase):
     )
     product_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # no FK (sibling feature)
     file_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # no FK (core/files)
+    # Resized variant generated at attach time; NULL if none. No FK (core/files).
+    thumbnail_file_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     alt_text: Mapped[str | None] = mapped_column(Text)
 

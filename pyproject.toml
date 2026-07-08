@@ -25,6 +25,7 @@ dependencies = [
     "httpx>=0.28",
     "boto3>=1.35",  # S3-compatible object storage adapter (core/files)
     "python-multipart>=0.0.12",  # multipart/form-data parsing for file uploads
+    "pillow>=11.0",  # raster thumbnail generation (core/files thumbnailer)
 ]
 
 [dependency-groups]

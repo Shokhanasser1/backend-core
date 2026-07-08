@@ -32,3 +32,17 @@ class StoragePort(Protocol):
     async def get(self, key: str) -> bytes: ...
 
     async def delete(self, key: str) -> None: ...
+
+
+class ThumbnailPort(Protocol):
+    """Image-transform port: produce a resized, metadata-stripped raster variant.
+
+    Given the source bytes, ``generate`` returns ``(bytes, content_type)`` for a
+    thumbnail whose longest edge is at most ``max_edge`` (aspect ratio preserved,
+    never enlarged). The output stays within the raster allowlist. CPU-bound work
+    runs off the event loop. A source that cannot be decoded is a bad upload
+    (``InvariantViolationError``, HTTP 422), not a backend failure."""
+
+    backend: ClassVar[str]
+
+    async def generate(self, data: bytes, *, max_edge: int) -> tuple[bytes, str]: ...

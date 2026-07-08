@@ -7,6 +7,7 @@ post-commit.
 """
 
 from collections.abc import Sequence
+from typing import Literal
 from uuid import UUID
 
 from core.files import FileDTO, FileService
@@ -59,8 +60,15 @@ class ProductImageService(Service):
         stored = await self._files.upload(
             filename=filename, declared_content_type=declared_content_type, data=data
         )
+        # Resized, metadata-stripped variant (a second core/files object). Generated
+        # synchronously — staff-only, low-volume; the bytes are ready on return.
+        thumbnail = await self._files.create_thumbnail(stored.id)
         image = ProductImage(
-            product_id=product_id, file_id=stored.id, position=position, alt_text=alt_text
+            product_id=product_id,
+            file_id=stored.id,
+            thumbnail_file_id=thumbnail.id,
+            position=position,
+            alt_text=alt_text,
         )
         await self._repo.add(image)
         self.emit(
@@ -69,6 +77,7 @@ class ProductImageService(Service):
                 "image_id": str(image.id),
                 "product_id": str(product_id),
                 "file_id": str(stored.id),
+                "thumbnail_file_id": str(thumbnail.id),
             },
         )
         return _to_dto(image)
@@ -80,18 +89,28 @@ class ProductImageService(Service):
         )
         return [_to_dto(image) for image in images]
 
-    async def open_content(self, image_id: UUID) -> tuple[FileDTO, bytes]:
-        """The image bytes for an owned image (404 for a foreign/missing one)."""
+    async def open_content(
+        self, image_id: UUID, *, variant: Literal["original", "thumb"] = "original"
+    ) -> tuple[FileDTO, bytes]:
+        """The image bytes for an owned image (404 for a foreign/missing one). The
+        ``thumb`` variant serves the generated thumbnail, falling back to the
+        original if none was recorded."""
         image = await self._repo.get_or_raise(image_id)
-        return await self._files.open(image.file_id)
+        file_id = image.file_id
+        if variant == "thumb" and image.thumbnail_file_id is not None:
+            file_id = image.thumbnail_file_id
+        return await self._files.open(file_id)
 
     async def remove(self, image_id: UUID) -> None:
         image = await self._repo.get_or_raise(image_id)
         product_id, file_id = image.product_id, image.file_id
-        # Drop the link row first, then the file (its storage delete runs last, so a
-        # backend failure rolls everything back).
+        thumbnail_file_id = image.thumbnail_file_id
+        # Drop the link row first, then the files (their storage deletes run last, so
+        # a backend failure rolls everything back). Thumbnail before the original.
         await self._repo.delete(image)
         await self._session.flush()
+        if thumbnail_file_id is not None:
+            await self._files.delete(thumbnail_file_id)
         await self._files.delete(file_id)
         self.emit(
             "commerce.product_image.removed",

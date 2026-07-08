@@ -5,6 +5,7 @@ the global security headers add nosniff, so inline is XSS-safe).
 """
 
 from collections.abc import Sequence
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
@@ -55,9 +56,11 @@ async def list_images(
     dependencies=[Depends(require_permission(perms.PRODUCT_IMAGE_READ))],
 )
 async def get_image_content(
-    image_id: UUID, service: ProductImageService = Depends(product_image_service)
+    image_id: UUID,
+    size: Literal["original", "thumb"] = Query(default="original"),
+    service: ProductImageService = Depends(product_image_service),
 ) -> Response:
-    dto, data = await service.open_content(image_id)
+    dto, data = await service.open_content(image_id, variant=size)
     return Response(
         content=data, media_type=dto.content_type, headers={"Content-Disposition": "inline"}
     )

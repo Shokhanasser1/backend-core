@@ -10,19 +10,29 @@ The app is reached only through the fixture — a feature never imports app.* (t
 would cross the modules -> app layer boundary; import-linter enforces it).
 """
 
+from io import BytesIO
 from typing import cast
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from PIL import Image
 
 from tests.test_auth_flows import _headers, _owner_with_tenant
 from tests.test_auth_flows_extended import _member_of
 
 pytestmark = pytest.mark.integration
 
-_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+def _png_bytes(size: int = 512) -> bytes:
+    """A real, decodable PNG — attach now generates a thumbnail (Pillow decodes it)."""
+    buffer = BytesIO()
+    Image.new("RGB", (size, size), (12, 120, 200)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+_PNG = _png_bytes()
 
 
 def _create_product(client: TestClient, token: str, sku: str = "P1") -> str:
@@ -62,6 +72,7 @@ def test_owner_attaches_lists_serves_and_deletes(commerce_client: TestClient) ->
     assert attached.status_code == 201, attached.text
     image = attached.json()
     assert image["product_id"] == product_id
+    assert image["thumbnail_file_id"] is not None  # generated at attach time
     image_id = image["id"]
 
     listed = commerce_client.get(
@@ -100,6 +111,31 @@ def test_owner_attaches_lists_serves_and_deletes(commerce_client: TestClient) ->
         ).status_code
         == 404
     )
+
+
+def test_thumbnail_variant_is_resized(commerce_client: TestClient) -> None:
+    _u, _t, owner = _owner_with_tenant(commerce_client, "thb@example.uz")
+    product_id = _create_product(commerce_client, owner)
+    image_id = _attach(commerce_client, owner, product_id, data=_png_bytes(512)).json()["id"]
+
+    original = commerce_client.get(
+        f"/api/commerce/product-images/{image_id}/content",
+        headers=_headers(owner),
+        params={"size": "original"},
+    )
+    assert original.status_code == 200
+    assert original.content == _PNG  # the exact uploaded bytes, unchanged
+
+    thumb = commerce_client.get(
+        f"/api/commerce/product-images/{image_id}/content",
+        headers=_headers(owner),
+        params={"size": "thumb"},
+    )
+    assert thumb.status_code == 200
+    assert thumb.headers["content-type"] == "image/png"
+    assert thumb.content != original.content  # a distinct, resized object
+    with Image.open(BytesIO(thumb.content)) as img:
+        assert max(img.size) <= 256  # capped at the configured max edge
 
 
 def test_member_reads_but_cannot_manage(commerce_client: TestClient) -> None:

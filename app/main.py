@@ -33,7 +33,7 @@ from core.billing.adapters import build_payment_providers
 from core.billing.api import router as billing_api_router
 from core.billing.permissions import register_billing_rbac
 from core.billing.router import router as billing_webhook_router
-from core.files.adapters import build_storage
+from core.files.adapters import build_storage, build_thumbnailer
 from core.files.permissions import register_files_rbac
 from core.files.router import router as files_router
 from core.tenants.permissions import TENANTS_PERMISSIONS
@@ -95,6 +95,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Object-storage backend for core/files (filesystem/s3). An "s3" backend
         # without credentials fails loudly here, at startup.
         app.state.file_storage = build_storage(app_settings)
+        # Image-transform backend for thumbnails (Pillow); resize/strip metadata.
+        app.state.file_thumbnailer = build_thumbnailer(app_settings)
 
         # Idempotently reconcile system roles + grants (as app_maintenance) and
         # load the currency exponents into the process-global registry (§2.5).

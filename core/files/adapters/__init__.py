@@ -9,7 +9,8 @@ import tempfile
 from pathlib import Path
 
 from core.files.adapters.filesystem import FilesystemStorage
-from core.files.ports import StoragePort
+from core.files.adapters.pillow import PillowThumbnailer
+from core.files.ports import StoragePort, ThumbnailPort
 from shared.config import Settings
 from shared.errors import InvariantViolationError
 
@@ -30,3 +31,11 @@ def build_storage(settings: Settings) -> StoragePort:
 
         return S3Storage.from_settings(settings)
     raise InvariantViolationError(f"unknown files storage backend: {backend!r}")
+
+
+def build_thumbnailer(settings: Settings) -> ThumbnailPort:
+    """The image-transform backend for thumbnails. Pillow is a hard dependency
+    (raster processing), so there is a single adapter today; kept behind a factory
+    to mirror ``build_storage`` and leave room for an alternate backend."""
+    _ = settings  # reserved for future per-deployment tuning (quality/format)
+    return PillowThumbnailer()

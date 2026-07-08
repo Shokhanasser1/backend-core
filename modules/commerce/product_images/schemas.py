@@ -11,5 +11,6 @@ class ProductImageDTO(BaseModel):
     id: UUID
     product_id: UUID
     file_id: UUID
+    thumbnail_file_id: UUID | None
     position: int
     alt_text: str | None

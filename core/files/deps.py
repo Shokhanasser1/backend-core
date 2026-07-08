@@ -17,5 +17,10 @@ async def file_service(
 ) -> FileService:
     state = request.app.state
     return FileService(
-        bundle.uow, state.bus, bundle.ctx, storage=state.file_storage, settings=state.settings
+        bundle.uow,
+        state.bus,
+        bundle.ctx,
+        storage=state.file_storage,
+        thumbnailer=state.file_thumbnailer,
+        settings=state.settings,
     )

@@ -20,6 +20,11 @@ async def product_image_service(
     state = request.app.state
     products = ProductService(bundle.uow, state.bus, bundle.ctx)
     files = FileService(
-        bundle.uow, state.bus, bundle.ctx, storage=state.file_storage, settings=state.settings
+        bundle.uow,
+        state.bus,
+        bundle.ctx,
+        storage=state.file_storage,
+        thumbnailer=state.file_thumbnailer,
+        settings=state.settings,
     )
     return ProductImageService(bundle.uow, state.bus, bundle.ctx, products=products, files=files)

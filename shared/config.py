@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     files_s3_region: str = "us-east-1"
     files_s3_access_key: str = ""
     files_s3_secret_key: str = ""
+    # Thumbnail longest-edge cap in px. attach (commerce.product_images) generates
+    # a resized, metadata-stripped variant through the thumbnailer; aspect ratio is
+    # preserved and images smaller than this are left as-is (never enlarged).
+    files_thumbnail_max_edge: int = 256
 
     @property
     def files_allowed_content_type_list(self) -> tuple[str, ...]:
