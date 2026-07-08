@@ -5,6 +5,39 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.8.0] — 2026-07-08 — Stripe-адаптер (бэклог v1.1)
+
+> Третий `PaymentProvider` для зарубежных клиентов (Payme/Click — UZS). Построен
+> по отдельной команде владельца. Принято; помечено тегом `v0.8.0`.
+
+### Added
+
+- **`core/billing/adapters/stripe.py` — адаптер Stripe Checkout.** Реализует порт
+  `PaymentProvider`. В отличие от Payme/Click (строят URL и принимают merchant-
+  колбэки), `create_checkout` делает **серверный** вызов Stripe API
+  (`POST /v1/checkout/sessions`, httpx + `call_resilient`: таймаут, повторы на
+  5xx/429/сеть, circuit breaker; 4xx — permanent, без повторов) и возвращает
+  hosted `url`. Наш `payment_id` едет в `client_reference_id` — вебхук
+  привязывается к платежу по нему.
+- **Суммы 1:1 с minor units ledger** (у Stripe та же конвенция минимальной единицы
+  на валюту) — без `×100` (это quirk только Payme). Валюта — любая (Stripe —
+  мультивалютный провайдер); сверяется с суммой в нашей записи.
+- **Вебхуки:** подпись `Stripe-Signature` — HMAC-SHA256 над `"{timestamp}.{body}"`
+  по секрету эндпоинта (constant-time; несколько `v1` при ротации ключей).
+  Маппинг событий: `checkout.session.completed`(paid)→confirm→`mark_succeeded`,
+  `checkout.session.expired`→cancel; прочие подписанные события → read-only
+  no-op с 200-ack (Stripe шлёт все типы на один эндпоинт и смотрит только на
+  HTTP-код). Битая подпись → 400; нераспознанный запрос → 403. Идемпотентность —
+  по Stripe event id через существующий `payment_webhooks` ledger; replay-защита
+  и элевация тенанта — в `WebhookProcessor` (без изменений).
+- **Роут** `POST /api/billing/webhooks/stripe` (public, подпись провайдера).
+  Включение — `ENABLED_PAYMENT_PROVIDERS`; провайдер без кредов валит старт.
+- **Новые env** (`.env.example`, `DEPLOYMENT.md`): `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`. Попутно в
+  `.env.example` добавлена отсутствовавшая секция billing (Payme/Click/Stripe).
+- **Без новой зависимости:** адаптер рукописный поверх httpx (как Payme/Click),
+  SDK Stripe не тянется.
+
 ## [0.7.1] — 2026-07-08 — превью/тумбнейлы к product_images
 
 > Продолжение v1.1 по отдельной команде владельца. Принято; помечено тегом `v0.7.1`.

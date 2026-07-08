@@ -13,11 +13,12 @@ from collections.abc import Mapping
 
 from core.billing.adapters.click import ClickProvider
 from core.billing.adapters.payme import PaymeProvider
+from core.billing.adapters.stripe import StripeProvider
 from core.billing.ports import PaymentProvider
 from shared.config import Settings
 from shared.errors import InvariantViolationError
 
-__all__ = ["ClickProvider", "PaymeProvider", "build_payment_providers"]
+__all__ = ["ClickProvider", "PaymeProvider", "StripeProvider", "build_payment_providers"]
 
 
 def build_payment_providers(settings: Settings) -> Mapping[str, PaymentProvider]:
@@ -30,6 +31,8 @@ def build_payment_providers(settings: Settings) -> Mapping[str, PaymentProvider]
             providers[code] = PaymeProvider.from_settings(settings)
         elif code == ClickProvider.code:
             providers[code] = ClickProvider.from_settings(settings)
+        elif code == StripeProvider.code:
+            providers[code] = StripeProvider.from_settings(settings)
         else:
             raise InvariantViolationError(f"unknown payment provider in config: {code}")
     return providers

@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     click_service_id: str = ""
     click_merchant_id: str = ""
     click_secret_key: str = ""
+    # Stripe (international clients): secret API key + webhook signing secret.
+    # Amounts map 1:1 to ledger minor units (Stripe's smallest-unit convention
+    # matches ours per currency). Enabled without keys = fail loudly at startup.
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    # Checkout redirect targets (Stripe requires both). create_payment's return_url,
+    # when given, overrides the success URL; the cancel URL comes from config.
+    stripe_success_url: str = "https://example.com/checkout/success"
+    stripe_cancel_url: str = "https://example.com/checkout/cancel"
 
     # --- notifications (Phase 3) ---
     sms_daily_cap_per_tenant: int = 200  # anti-abuse (OV-25); 0 = unlimited

@@ -30,7 +30,8 @@
   `SECRET_ENCRYPTION_KEYS` (Fernet-ключи, base64; несколько через запятую —
   ротация MultiFernet: новый ключ первым, старый оставить для расшифровки),
   реальные `DATABASE_*_URL` (по роли), креды провайдеров/каналов
-  (`PAYME_*`, `CLICK_*`, `SMTP_*`, `TELEGRAM_BOT_TOKEN`, `ESKIZ_*`).
+  (`PAYME_*`, `CLICK_*`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SMTP_*`,
+  `TELEGRAM_BOT_TOKEN`, `ESKIZ_*`).
 - Хранить в секрет-менеджере (Vault / cloud secrets), не в файлах образа.
 - `CORS_ORIGINS` — строгий белый список; пусто = кросс-домен запрещён.
 - `ENABLED_PAYMENT_PROVIDERS` — включать только провайдеров с настроенными
@@ -68,7 +69,8 @@
   хранения). Постгрес и Redis (а значит и все ПД: email/телефон в `users`,
   `notification_outbox`, `audit_log.ip`) — в дата-центре в УЗ.
 - Приложение stateless → переносимо; юрисдикция определяется размещением Postgres/
-  Redis/бэкапов. Внешние вызовы (Payme/Click/Eskiz/Telegram) — локальные для рынка.
+  Redis/бэкапов. Внешние вызовы Payme/Click/Eskiz/Telegram — локальные для рынка;
+  Stripe (для зарубежных клиентов) — трансграничный вызов (учесть при включении).
 - Ретенция ПД включена: терминальные строки `notification_outbox` (recipient —
   email/телефон) чистятся (`NOTIFICATION_RETENTION_DAYS`, дефолт 90);
   `audit_log` — `AUDIT_RETENTION_DAYS` (дефолт 730). См. §8.

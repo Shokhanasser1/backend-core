@@ -41,7 +41,7 @@ crm, saas и другие — см. бэклог.
 |-----|-----------|----------|
 | ✅ core/files + фича product_images | S3/filesystem-хранилище, magic bytes | v1.1 (тег `v0.7.0`) |
 | ✅ Превью/тумбнейлы к product_images | Pillow за портом `ThumbnailPort`, синхронно при attach, `?size=thumb` | продолжение v1.1 (тег `v0.7.1`) |
-| Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов | v1.1 |
+| ✅ Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов (сервер→сервер checkout, подписанные вебхуки) | v1.1 (тег `v0.8.0`) |
 | Модуль saas | Feature flags, лимиты тарифов, usage metering, onboarding | v2 |
 | Модуль crm | Контакты, компании, сделки, воронка, задачи, таймлайн | v2 |
 | tg-bot-template | Sibling-шаблон: aiogram поверх API этого же ядра | отдельный репозиторий |
@@ -51,6 +51,29 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-08 — **Stripe-адаптер (бэклог v1.1, по команде владельца) — ПРИНЯТ,
+  закоммичен, тег `v0.8.0`, запушен в origin.** Третий `PaymentProvider` для
+  зарубежных клиентов.
+  `core/billing/adapters/stripe.py` реализует порт: `create_checkout` — серверный
+  вызов Stripe API (`POST /v1/checkout/sessions`, httpx + `call_resilient`:
+  таймаут/повторы на 5xx/429/сеть/circuit breaker; 4xx permanent без повторов),
+  наш `payment_id` в `client_reference_id`. **Суммы 1:1** с minor units ledger
+  (у Stripe та же конвенция минимальной единицы — без ×100, это quirk Payme);
+  валюта любая. **Вебхуки:** подпись `Stripe-Signature` HMAC-SHA256 над
+  `"{ts}.{body}"` (constant-time, несколько `v1` при ротации); события
+  `checkout.session.completed`(paid)→confirm, `.expired`→cancel, прочие →
+  read-only no-op с 200-ack (Stripe шлёт все типы на один эндпоинт, смотрит
+  только HTTP-код); битая подпись→400, нераспознанный запрос→403.
+  Идемпотентность — по event id через существующий `payment_webhooks` ledger;
+  `WebhookProcessor` и порт не менялись (маппинг событий уложен в модель действий
+  порта). Роут `POST /api/billing/webhooks/stripe` (public). Wiring:
+  `build_payment_providers += stripe`, конфиг `STRIPE_*` (+ отсутствовавшая секция
+  billing в `.env.example`), README billing/DEPLOYMENT. **Без SDK Stripe** —
+  рукописно поверх httpx (как Payme/Click). Проверки: **329 тестов зелёные,
+  покрытие 93.88%**, ruff/mypy strict/import-linter чисто; новый адаптер покрыт
+  100%. Найден+исправлен 1 дефект в тестах (route-тесты не тянут `_clean_db` →
+  общий `event_id` давал коллизию dedup-ключа с processor-тестом → уникальный id).
+  Принято, закоммичено, помечено тегом `v0.8.0`, запушено в origin.
 - 2026-07-08 — **`v0.7.1` (превью/тумбнейлы) запушен в origin** (`git push origin
   main` + `git push origin v0.7.1`). `main` = `415072a` синхронен с `origin/main`,
   тег `v0.7.1` на удалёнке. Раньше был отложен по решению владельца — теперь

@@ -71,3 +71,11 @@ async def payme_webhook(request: Request) -> JSONResponse:
 )
 async def click_webhook(request: Request) -> JSONResponse:
     return await _handle(request, "click")
+
+
+@router.post(
+    "/stripe",
+    dependencies=[Depends(public_endpoint(reason="Stripe webhook signature auth (V4)"))],
+)
+async def stripe_webhook(request: Request) -> JSONResponse:
+    return await _handle(request, "stripe")

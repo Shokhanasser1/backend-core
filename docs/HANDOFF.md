@@ -5,6 +5,32 @@
 `CLAUDE.md` (конвенции разработки), `docs/phase0/00-open-questions.md` (реестр
 решений ОВ).
 
+## Обновление 2026-07-08 (3) — Stripe-адаптер (принято, тег `v0.8.0`, запушено)
+
+Третий элемент v1.1 (по отдельной команде владельца). **Принято, закоммичено,
+тег `v0.8.0`, запушено в origin.** Третий `PaymentProvider` — для зарубежных
+клиентов (Payme/Click остаются по UZS):
+
+- **`core/billing/adapters/stripe.py`:** реализует порт. `create_checkout` —
+  **серверный** вызов Stripe API (`POST /v1/checkout/sessions`, httpx +
+  `call_resilient`: таймаут/повторы 5xx-429-сеть/circuit breaker; 4xx permanent
+  без повторов); `payment_id` в `client_reference_id`. **Суммы 1:1** с minor units
+  ledger (у Stripe та же конвенция минимальной единицы — без ×100, это quirk
+  Payme); валюта любая. **Вебхуки:** `Stripe-Signature` = HMAC-SHA256 над
+  `"{ts}.{body}"` (constant-time, несколько `v1` при ротации). События:
+  `checkout.session.completed`(paid)→confirm, `.expired`→cancel, прочие →
+  read-only no-op с 200-ack (Stripe шлёт все типы на один эндпоинт, смотрит
+  только HTTP-код); битая подпись→400, нераспознанное→403.
+- **`WebhookProcessor` и порт НЕ менялись** — маппинг событий уложен в имеющуюся
+  модель действий; идемпотентность — по Stripe event id через `payment_webhooks`.
+- **Роут** `POST /api/billing/webhooks/stripe` (public). Конфиг `STRIPE_*`
+  (+ добавлена отсутствовавшая секция billing в `.env.example`). **Без SDK Stripe**
+  — рукописно поверх httpx (как Payme/Click).
+- **Дефект в тестах (исправлен):** route-тесты не тянут `_clean_db` → общий
+  `event_id` давал коллизию dedup-ключа с processor-тестом → уникальный `event_id`.
+- Проверки: **329 тестов зелёные, 93.88%**, ruff/mypy strict/import-linter чисто;
+  адаптер покрыт 100%. **Статус:** тег `v0.8.0`, запушен в origin.
+
 ## Обновление 2026-07-08 (2) — превью/тумбнейлы к product_images (принято, тег `v0.7.1`, запушено)
 
 Продолжение v1.1 по отдельной команде владельца. **Принято, закоммичено и

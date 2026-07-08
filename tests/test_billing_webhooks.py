@@ -13,6 +13,7 @@ we assert both the provider-dialect answer and the committed DB effect.
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 from types import SimpleNamespace
 from uuid import uuid4
@@ -26,6 +27,7 @@ from app.config import Settings
 from app.main import create_app
 from core.billing.adapters.click import ClickProvider
 from core.billing.adapters.payme import PaymeProvider
+from core.billing.adapters.stripe import StripeProvider
 from core.billing.ports import RawWebhook
 from core.billing.webhooks import WebhookProcessor
 from shared.db_provisioning import ROLE_MAINTENANCE, ROLE_MIGRATOR, ROLE_USER
@@ -35,6 +37,7 @@ pytestmark = pytest.mark.integration
 
 PAYME_KEY = "test-merchant-key"
 CLICK_SECRET = "click-secret"
+STRIPE_WEBHOOK_SECRET = "whsec_test"
 PRO_PRICE = 50_000  # minor units, UZS (exponent 0 -> sums)
 
 # Payme JSON-RPC error codes asserted below (mirror the adapter's mapping).
@@ -174,9 +177,39 @@ def _processor(sessions: async_sessionmaker[AsyncSession], settings: Settings) -
             "click": ClickProvider(
                 service_id="svc-1", merchant_id="merch-1", secret_key=CLICK_SECRET
             ),
+            "stripe": StripeProvider(
+                secret_key="sk_test_x",
+                webhook_secret=STRIPE_WEBHOOK_SECRET,
+                success_url="https://shop.example/ok",
+                cancel_url="https://shop.example/cancel",
+            ),
         },
         settings=settings,
     )
+
+
+# Stripe amounts map 1:1 to ledger minor units; the seed uses UZS, so the events
+# carry "uzs" to reconcile against the seeded payment. The adapter is
+# currency-agnostic (Stripe is the multi-currency provider) — the currency only
+# has to match our record.
+def _stripe_raw(event_type: str, obj: dict[str, object], *, event_id: str = "evt_1") -> RawWebhook:
+    body = json.dumps({"id": event_id, "type": event_type, "data": {"object": obj}})
+    timestamp = "1700000000"
+    signed = f"{timestamp}.{body}".encode()
+    v1 = hmac.new(STRIPE_WEBHOOK_SECRET.encode(), signed, hashlib.sha256).hexdigest()
+    return RawWebhook(
+        headers={"Stripe-Signature": f"t={timestamp},v1={v1}", "Content-Type": "application/json"},
+        body=body,
+    )
+
+
+def _stripe_completed(payment_id: str, amount: int) -> dict[str, object]:
+    return {
+        "client_reference_id": payment_id,
+        "payment_status": "paid",
+        "amount_total": amount,
+        "currency": "uzs",
+    }
 
 
 def _payme_auth(key: str = PAYME_KEY) -> str:
@@ -446,6 +479,119 @@ async def test_unrecognizable_request_raises_verification_error(
         await proc.process("payme", RawWebhook(headers={}, body="not json"))
 
 
+# ------------------------------------------------------------ Stripe (webhooks)
+
+
+async def test_stripe_completed_succeeds_and_activates_subscription(
+    maintenance_session_factory: async_sessionmaker[AsyncSession],
+    test_settings: Settings,
+    role_urls: dict[str, str],
+) -> None:
+    seed = await _seed(role_urls, payment_status="created", provider="stripe")
+    proc = _processor(maintenance_session_factory, test_settings)
+
+    status, body = await proc.process(
+        "stripe",
+        _stripe_raw(
+            "checkout.session.completed", _stripe_completed(str(seed.payment_id), seed.amount)
+        ),
+    )
+
+    assert status == 200
+    assert body == {"received": True}
+    assert await _payment_status(role_urls, seed.payment_id) == "succeeded"
+    # Subscription activated in the SAME transaction as the payment success.
+    assert await _subscription_status(role_urls, seed.subscription_id) == "active"
+
+
+async def test_stripe_expired_cancels_payment(
+    maintenance_session_factory: async_sessionmaker[AsyncSession],
+    test_settings: Settings,
+    role_urls: dict[str, str],
+) -> None:
+    seed = await _seed(role_urls, payment_status="created", provider="stripe")
+    proc = _processor(maintenance_session_factory, test_settings)
+
+    status, _ = await proc.process(
+        "stripe",
+        _stripe_raw(
+            "checkout.session.expired",
+            {"client_reference_id": str(seed.payment_id), "currency": "uzs"},
+        ),
+    )
+
+    assert status == 200
+    assert await _payment_status(role_urls, seed.payment_id) == "canceled"
+
+
+async def test_stripe_invalid_signature_no_effect(
+    maintenance_session_factory: async_sessionmaker[AsyncSession],
+    test_settings: Settings,
+    role_urls: dict[str, str],
+) -> None:
+    seed = await _seed(role_urls, payment_status="created", provider="stripe")
+    proc = _processor(maintenance_session_factory, test_settings)
+    raw = _stripe_raw(
+        "checkout.session.completed", _stripe_completed(str(seed.payment_id), seed.amount)
+    )
+    tampered = RawWebhook(headers={"Stripe-Signature": "t=1700000000,v1=deadbeef"}, body=raw.body)
+
+    status, body = await proc.process("stripe", tampered)
+
+    assert status == 400  # Stripe dialect for a signature failure
+    assert body == {"error": "invalid signature"}
+    assert await _payment_status(role_urls, seed.payment_id) == "created"  # untouched
+    # Journalled under the rejected: namespace — no poisoning of the legit key.
+    wh = await _fetch(role_urls, "SELECT dedup_key, status FROM payment_webhooks", {})
+    assert len(wh) == 1
+    assert str(wh[0]["dedup_key"]).startswith("rejected:")
+
+
+async def test_stripe_unhandled_event_acknowledged_without_effect(
+    maintenance_session_factory: async_sessionmaker[AsyncSession],
+    test_settings: Settings,
+    role_urls: dict[str, str],
+) -> None:
+    seed = await _seed(role_urls, payment_status="created", provider="stripe")
+    proc = _processor(maintenance_session_factory, test_settings)
+
+    status, body = await proc.process(
+        "stripe", _stripe_raw("payment_intent.succeeded", {"id": "pi_1", "currency": "uzs"})
+    )
+
+    assert status == 200
+    assert body == {"received": True}
+    assert await _payment_status(role_urls, seed.payment_id) == "created"  # no state change
+    # Read-only no-op: nothing written to the webhook ledger.
+    wh = await _fetch(role_urls, "SELECT count(*) AS n FROM payment_webhooks", {})
+    assert wh[0]["n"] == 0
+
+
+async def test_stripe_replay_is_single_effect(
+    maintenance_session_factory: async_sessionmaker[AsyncSession],
+    test_settings: Settings,
+    role_urls: dict[str, str],
+) -> None:
+    seed = await _seed(role_urls, payment_status="created", provider="stripe")
+    proc = _processor(maintenance_session_factory, test_settings)
+    raw = _stripe_raw(
+        "checkout.session.completed", _stripe_completed(str(seed.payment_id), seed.amount)
+    )
+
+    _, first = await proc.process("stripe", raw)
+    _, second = await proc.process("stripe", raw)  # duplicate delivery (same event id)
+
+    assert first == {"received": True}
+    assert second == {"received": True}
+    assert await _payment_status(role_urls, seed.payment_id) == "succeeded"
+    ledger = await _fetch(
+        role_urls,
+        "SELECT count(*) AS n FROM payment_webhooks WHERE dedup_key = :k",
+        {"k": "evt_1:confirm"},
+    )
+    assert ledger[0]["n"] == 1  # exactly one effect
+
+
 # ---------------------------------------------------- HTTP route (end-to-end)
 
 
@@ -521,3 +667,40 @@ def test_route_unrecognizable_request_returns_403(
             headers={"Content-Type": "application/json"},
         )
     assert resp.status_code == 403  # no dialect could be determined -> fallback
+
+
+def _stripe_app_settings(role_urls: dict[str, str], redis_url: str) -> Settings:
+    return Settings(
+        _env_file=None,
+        app_env="test",
+        log_level="WARNING",
+        database_url=role_urls[ROLE_USER],
+        database_migrator_url=role_urls[ROLE_MIGRATOR],
+        database_maintenance_url=role_urls[ROLE_MAINTENANCE],
+        redis_url=redis_url,
+        enabled_payment_providers="stripe",
+        stripe_secret_key="sk_test_x",
+        stripe_webhook_secret=STRIPE_WEBHOOK_SECRET,
+    )
+
+
+def test_stripe_route_completed_end_to_end(role_urls: dict[str, str], redis_url: str) -> None:
+    seed = asyncio.run(_seed(role_urls, payment_status="created", provider="stripe"))
+    # A unique event id: route tests do not truncate the DB (they lack the
+    # _clean_db fixture), so the dedup ledger from the preceding processor tests
+    # persists — reusing an event id would collide and replay instead of process.
+    raw = _stripe_raw(
+        "checkout.session.completed",
+        _stripe_completed(str(seed.payment_id), seed.amount),
+        event_id="evt_route",
+    )
+    app = create_app(_stripe_app_settings(role_urls, redis_url))
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/billing/webhooks/stripe",
+            content=raw.body,
+            headers=dict(raw.headers),
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"received": True}
+    assert asyncio.run(_payment_status(role_urls, seed.payment_id)) == "succeeded"

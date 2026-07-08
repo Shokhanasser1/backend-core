@@ -6,9 +6,13 @@ normalization and the provider-dialect responses. No DB, no Docker."""
 
 import base64
 import hashlib
+import hmac
 import json
+from collections.abc import Mapping
+from urllib.parse import parse_qs
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.config import Settings
@@ -23,6 +27,11 @@ from core.billing.adapters.payme import (
     minor_units_from_tiyin,
     to_tiyin,
 )
+from core.billing.adapters.stripe import (
+    StripeProvider,
+    minor_units_from_stripe,
+    to_stripe_amount,
+)
 from core.billing.ports import CallbackOutcome, ProviderCallback, RawWebhook
 from core.billing.schemas import PaymentDTO
 from shared.errors import (
@@ -34,6 +43,7 @@ from shared.money import Money
 
 PAYME_KEY = "secret-merchant-key"
 CLICK_SECRET = "click-secret"
+STRIPE_WEBHOOK_SECRET = "whsec_test"
 
 
 def _payment(amount: int = 5000) -> PaymentDTO:
@@ -264,6 +274,226 @@ def test_click_response_success_and_errors() -> None:
     assert mismatch.body["error"] == -2
 
 
+# --- Stripe adapter ---
+
+
+def _stripe(transport: httpx.MockTransport | None = None) -> StripeProvider:
+    return StripeProvider(
+        secret_key="sk_test_x",
+        webhook_secret=STRIPE_WEBHOOK_SECRET,
+        success_url="https://shop.example/ok",
+        cancel_url="https://shop.example/cancel",
+        transport=transport,
+    )
+
+
+def _stripe_sig(
+    body: str, *, secret: str = STRIPE_WEBHOOK_SECRET, timestamp: str = "1700000000"
+) -> str:
+    signed = f"{timestamp}.{body}".encode()
+    v1 = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return f"t={timestamp},v1={v1}"
+
+
+def _stripe_event(event_type: str, obj: Mapping[str, object], *, event_id: str = "evt_1") -> str:
+    return json.dumps({"id": event_id, "type": event_type, "data": {"object": obj}})
+
+
+def _completed_obj(
+    payment_id: str, *, amount: int = 5000, currency: str = "usd"
+) -> dict[str, object]:
+    return {
+        "client_reference_id": payment_id,
+        "payment_status": "paid",
+        "amount_total": amount,
+        "currency": currency,
+    }
+
+
+def test_stripe_amount_maps_one_to_one() -> None:
+    # Stripe's smallest-unit convention equals our ledger minor units (no x100).
+    assert to_stripe_amount(Money(5000, "USD")) == 5000
+    assert minor_units_from_stripe(5000, "usd") == Money(5000, "USD")
+    # Non-integer / negative / bad currency are rejected, not coerced.
+    with pytest.raises(PaymentProviderError):
+        minor_units_from_stripe("5000", "usd")
+    with pytest.raises(PaymentProviderError):
+        minor_units_from_stripe(-1, "usd")
+    with pytest.raises(PaymentProviderError):
+        minor_units_from_stripe(5000, "us")
+
+
+async def test_stripe_create_checkout_calls_api_and_returns_url() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("authorization")
+        captured["body"] = request.content.decode()
+        return httpx.Response(200, json={"id": "cs_1", "url": "https://checkout.stripe.com/c/cs_1"})
+
+    payment = _payment(amount=7000).model_copy(
+        update={"provider": "stripe", "amount": Money(7000, "USD")}
+    )
+    checkout = await _stripe(httpx.MockTransport(handler)).create_checkout(
+        payment, return_url="https://shop.example/back"
+    )
+
+    assert checkout.checkout_url == "https://checkout.stripe.com/c/cs_1"
+    assert checkout.provider == "stripe"
+    assert captured["url"] == "https://api.stripe.com/v1/checkout/sessions"
+    assert captured["auth"] == "Bearer sk_test_x"
+    # The Stripe API is form-encoded with bracketed nested keys; decode to assert.
+    fields = parse_qs(str(captured["body"]))
+    assert fields["client_reference_id"] == [str(payment.id)]
+    assert fields["line_items[0][price_data][unit_amount]"] == ["7000"]  # 1:1, no x100
+    assert fields["line_items[0][price_data][currency]"] == ["usd"]
+    assert fields["success_url"] == ["https://shop.example/back"]  # return_url overrides
+    assert fields["cancel_url"] == ["https://shop.example/cancel"]
+
+
+async def test_stripe_create_checkout_retries_5xx_then_succeeds() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(503)  # transient -> retried
+        return httpx.Response(200, json={"id": "cs_2", "url": "https://checkout.stripe.com/c/cs_2"})
+
+    payment = _payment().model_copy(update={"provider": "stripe", "amount": Money(5000, "USD")})
+    checkout = await _stripe(httpx.MockTransport(handler)).create_checkout(payment, None)
+    assert checkout.checkout_url.endswith("cs_2")
+    assert len(calls) == 2  # first 503 retried
+
+
+async def test_stripe_create_checkout_4xx_is_permanent_no_retry() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(400, json={"error": {"message": "bad"}})
+
+    payment = _payment().model_copy(update={"provider": "stripe", "amount": Money(5000, "USD")})
+    with pytest.raises(PaymentProviderError):
+        await _stripe(httpx.MockTransport(handler)).create_checkout(payment, None)
+    assert len(calls) == 1  # 4xx not retried
+
+
+def test_stripe_parse_completed_is_confirm() -> None:
+    payment_id = str(uuid4())
+    body = _stripe_event("checkout.session.completed", _completed_obj(payment_id))
+    callback = _stripe().parse_webhook(
+        RawWebhook(headers={"Stripe-Signature": _stripe_sig(body)}, body=body)
+    )
+    assert callback.action == "confirm"
+    assert callback.signature_valid is True
+    assert callback.payment_reference == payment_id
+    assert callback.provider_txn_id == "evt_1"  # dedup keys on the event id
+    assert callback.amount == Money(5000, "USD")
+
+
+def test_stripe_parse_expired_is_cancel() -> None:
+    payment_id = str(uuid4())
+    body = _stripe_event(
+        "checkout.session.expired", {"client_reference_id": payment_id, "currency": "usd"}
+    )
+    callback = _stripe().parse_webhook(
+        RawWebhook(headers={"Stripe-Signature": _stripe_sig(body)}, body=body)
+    )
+    assert callback.action == "cancel"
+    assert callback.payment_reference == payment_id
+    assert callback.amount.amount == 0  # cancel skips amount reconciliation
+
+
+def test_stripe_parse_unhandled_event_is_readonly_noop() -> None:
+    body = _stripe_event("payment_intent.succeeded", {"id": "pi_1", "currency": "usd"})
+    callback = _stripe().parse_webhook(
+        RawWebhook(headers={"Stripe-Signature": _stripe_sig(body)}, body=body)
+    )
+    assert callback.action == "status"  # read-only ack, no state change
+    assert callback.payment_reference == ""
+    assert callback.provider_txn_id is None
+
+
+def test_stripe_parse_completed_but_unpaid_is_noop() -> None:
+    # A completed session that is not yet paid must not confirm the payment.
+    obj = {"client_reference_id": str(uuid4()), "payment_status": "unpaid", "currency": "usd"}
+    body = _stripe_event("checkout.session.completed", obj)
+    callback = _stripe().parse_webhook(
+        RawWebhook(headers={"Stripe-Signature": _stripe_sig(body)}, body=body)
+    )
+    assert callback.action == "status"
+
+
+def test_stripe_parse_bad_signature_sets_invalid() -> None:
+    payment_id = str(uuid4())
+    body = _stripe_event("checkout.session.completed", _completed_obj(payment_id))
+    # Signature computed with a different secret -> invalid, but still normalized.
+    header = _stripe_sig(body, secret="whsec_wrong")
+    callback = _stripe().parse_webhook(RawWebhook(headers={"Stripe-Signature": header}, body=body))
+    assert callback.signature_valid is False
+    assert callback.action == "confirm"
+
+
+def test_stripe_parse_missing_signature_is_invalid() -> None:
+    body = _stripe_event("checkout.session.completed", _completed_obj(str(uuid4())))
+    callback = _stripe().parse_webhook(RawWebhook(headers={}, body=body))
+    assert callback.signature_valid is False
+
+
+def test_stripe_parse_unrecognizable_body_raises() -> None:
+    with pytest.raises(WebhookVerificationError):
+        _stripe().parse_webhook(RawWebhook(headers={}, body="not json"))
+    with pytest.raises(WebhookVerificationError):
+        _stripe().parse_webhook(RawWebhook(headers={}, body=json.dumps({"foo": "bar"})))
+
+
+async def test_stripe_create_checkout_no_url_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "cs_x"})  # session without a url
+
+    payment = _payment().model_copy(update={"provider": "stripe", "amount": Money(5000, "USD")})
+    with pytest.raises(PaymentProviderError):
+        await _stripe(httpx.MockTransport(handler)).create_checkout(payment, None)
+
+
+async def test_stripe_create_checkout_non_object_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[1, 2, 3])  # not a JSON object
+
+    payment = _payment().model_copy(update={"provider": "stripe", "amount": Money(5000, "USD")})
+    with pytest.raises(PaymentProviderError):
+        await _stripe(httpx.MockTransport(handler)).create_checkout(payment, None)
+
+
+async def test_stripe_create_checkout_transport_error_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")  # network failure -> transient, then surfaced
+
+    payment = _payment().model_copy(update={"provider": "stripe", "amount": Money(5000, "USD")})
+    with pytest.raises(PaymentProviderError):
+        await _stripe(httpx.MockTransport(handler)).create_checkout(payment, None)
+
+
+def test_stripe_malformed_signature_header_is_invalid() -> None:
+    body = _stripe_event("checkout.session.completed", _completed_obj(str(uuid4())))
+    callback = _stripe().parse_webhook(
+        RawWebhook(headers={"Stripe-Signature": "garbage"}, body=body)
+    )
+    assert callback.signature_valid is False
+
+
+def test_stripe_response_dialect() -> None:
+    ok = _stripe().build_webhook_response(CallbackOutcome(status="ok"))
+    assert ok.status_code == 200
+    assert ok.body["received"] is True
+    # not_found is still acked (Stripe should not retry what a retry cannot fix).
+    assert _stripe().build_webhook_response(CallbackOutcome(status="not_found")).status_code == 200
+    bad = _stripe().build_webhook_response(CallbackOutcome(status="invalid_signature"))
+    assert bad.status_code == 400
+
+
 # --- provider registry ---
 
 
@@ -298,4 +528,19 @@ def test_registry_missing_credentials_fails_loudly() -> None:
 
 def test_registry_unknown_provider_rejected() -> None:
     with pytest.raises(InvariantViolationError):
+        build_payment_providers(_settings(enabled_payment_providers="paypal"))
+
+
+def test_registry_builds_stripe() -> None:
+    settings = _settings(
+        enabled_payment_providers="stripe",
+        stripe_secret_key="sk_test_x",
+        stripe_webhook_secret="whsec_x",
+    )
+    providers = build_payment_providers(settings)
+    assert isinstance(providers["stripe"], StripeProvider)
+
+
+def test_registry_stripe_missing_credentials_fails_loudly() -> None:
+    with pytest.raises(PaymentProviderError):
         build_payment_providers(_settings(enabled_payment_providers="stripe"))
