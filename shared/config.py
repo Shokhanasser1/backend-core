@@ -130,6 +130,12 @@ class Settings(BaseSettings):
     # preserved and images smaller than this are left as-is (never enlarged).
     files_thumbnail_max_edge: int = 256
 
+    # --- saas module (business module; features gated by ENABLED_MODULES=saas) ---
+    # saas.metering usage-counter retention: buckets older than this are swept by
+    # the worker's daily retention job (as app_maintenance), only when saas is
+    # enabled. ~13 months so a full year of monthly reports stays queryable.
+    saas_usage_retention_days: int = 400
+
     @property
     def files_allowed_content_type_list(self) -> tuple[str, ...]:
         return _split_csv(self.files_allowed_content_types)

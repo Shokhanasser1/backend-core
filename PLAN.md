@@ -42,7 +42,7 @@ crm, saas и другие — см. бэклог.
 | ✅ core/files + фича product_images | S3/filesystem-хранилище, magic bytes | v1.1 (тег `v0.7.0`) |
 | ✅ Превью/тумбнейлы к product_images | Pillow за портом `ThumbnailPort`, синхронно при attach, `?size=thumb` | продолжение v1.1 (тег `v0.7.1`) |
 | ✅ Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов (сервер→сервер checkout, подписанные вебхуки) | v1.1 (тег `v0.8.0`) |
-| Модуль saas (в работе) | ✅ `saas.entitlements` (feature flags + лимиты тарифа); далее `metering`, `onboarding` | v2 |
+| Модуль saas (в работе) | ✅ `saas.entitlements` (флаги+лимиты тарифа) · ✅ `saas.metering` (usage); далее `onboarding` | v2 |
 | Модуль crm | Контакты, компании, сделки, воронка, задачи, таймлайн | v2 |
 | tg-bot-template | Sibling-шаблон: aiogram поверх API этого же ядра | отдельный репозиторий |
 | Идеи будущих модулей | booking (записи: клиники, салоны, курсы), delivery, loyalty | по спросу клиентов |
@@ -51,6 +51,35 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-08 — **Модуль `saas`, этап 2 — фича `saas.metering` ПРИНЯТА,
+  закоммичена, тег `v0.10.0`.** Учёт потребления. Решения Фаза-0-стиля
+  (утв. владельцем через AskUserQuestion, с учётом механики шины): **(1) источник —
+  публичный `MeteringService.record()`**, НЕ подписки на шину: фичам запрещён
+  wildcard (`shared/events.py`: `*`/`<module>.*` — привилегия ядра/audit), а
+  `handler_id`=module+qualname обязан быть уникальным → generic-подписка на
+  конфиг-список событий технически хрупка и зашивала бы чужие имена; вызывающий код
+  метит явно. **(2) metering и entitlements НЕЗАВИСИМЫ** (не связаны requires):
+  лимиты-счётчики остаются в entitlements через `current_count`. Фича
+  `saas.metering` (requires core auth/tenants; НЕ billing): таблица
+  `saas_usage_counters` (тенантная RLS, ветка `saas_metering`) — одна строка на
+  `(tenant, metric, день)`, дневной bucket, атомарный UPSERT (`INSERT … ON CONFLICT
+  DO UPDATE value=value+delta`, без read-modify-write гонки). `MeteringService`:
+  `record(metric, delta, at=)` (пишется в транзакции вызывающего; effectively-once,
+  если звать из reliable-обработчика — dedup `processed_events`), `usage(metric,
+  since, until)`, `summary(since, until)`. Право `saas.usage:read` (owner/admin),
+  роут `GET /api/saas/usage/me` (окно `?since&until`). **Ретенция** bucket'ов:
+  `purge_expired_usage` (app_maintenance, батчами как audit), конфиг
+  `SAAS_USAGE_RETENTION_DAYS` (400 ≈ 13 мес); вписана в суточную джобу воркера
+  `purge_retention` **условно** (`if "saas" in enabled_module_list`, ленивый импорт —
+  app→modules легально, no-op при выключенном saas). Событий не публикует/не слушает
+  (чистый примитив). Проверки: **342 теста зелёные (+6), покрытие 94.20%**,
+  ruff/mypy strict (161 файл)/import-linter (4 слоя) чисто, миграции всех веток
+  обратимы (+`saas_metering`). Тесты: фича-тесты (record/usage/summary/окно/изоляция/
+  403+401) + `tests/test_saas_metering_retention.py` (реальная джоба воркера сметает
+  протухшие bucket'ы при включённом saas). **Замечание по прогону:** параллельный
+  запуск двух testcontainers-сессий (полный прогон + отдельный `test_migrations`)
+  подвесил первый набор на ресурсах — артефакт, не дефект; чистый перезапуск прошёл.
+  Принято, закоммичено, помечено тегом `v0.10.0`. → далее этап 3: `saas.onboarding`.
 - 2026-07-08 — **Модуль `saas`, этап 1 — фича `saas.entitlements` ПРИНЯТА,
   закоммичена, тег `v0.9.0`.** Второй бизнес-модуль после commerce (бэклог v2); решения
   Фазы-0-стиля утверждены владельцем: saas — бизнес-модуль из фич (как commerce);

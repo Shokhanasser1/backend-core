@@ -5,6 +5,34 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.10.0] — 2026-07-08 — Модуль saas, этап 2: saas.metering (бэклог v2)
+
+> Учёт потребления (usage). Вторая фича модуля saas. Построен по команде владельца
+> после согласования решений. Принято; помечено тегом `v0.10.0`.
+
+### Added
+
+- **Фича `saas.metering`** — учёт потребления: счётчики по метрикам, агрегированные
+  по дням. `requires_core = auth, tenants` (НЕ billing); горизонтально независима.
+- **`MeteringService`** (публичный интерфейс, §1.2):
+  - `record(metric_key, delta=1, *, at=None)` — атомарный UPSERT счётчика тенанта за
+    UTC-день (`INSERT … ON CONFLICT (tenant, metric, bucket) DO UPDATE
+    value=value+delta`); пишется в транзакции вызывающего. Не идемпотентен сам по
+    себе — вызов из reliable-обработчика effectively-once (dedup `processed_events`).
+  - `usage(metric, *, since, until)` / `summary(*, since, until)` — суммы за окно дней.
+- **Источник данных — явный вызов `record()`** (решение владельца), НЕ подписки на
+  шину: фичам запрещён wildcard (привилегия ядра), а generic-меру нельзя зашивать
+  чужими именами событий. metering — чистый примитив: событий не публикует/не слушает.
+- **Независимость от `saas.entitlements`** (решение владельца): metering =
+  учёт/отчёты; лимиты-счётчики остаются в entitlements через `current_count`.
+- **Таблица** `saas_usage_counters` — тенантная (RLS, ветка Alembic `saas_metering`):
+  `(tenant, metric_key, bucket)` уникальны, `value` (bigint). Дневная гранулярность.
+- **Право** `saas.usage:read` (owner/admin) + роут `GET /api/saas/usage/me`
+  (окно `?since&until`).
+- **Ретенция:** `purge_expired_usage` (app_maintenance, батчами) вписана в суточную
+  джобу воркера `purge_retention` **условно** — только при `ENABLED_MODULES=saas`
+  (ленивый импорт; no-op иначе). Конфиг `SAAS_USAGE_RETENTION_DAYS` (400 ≈ 13 мес).
+
 ## [0.9.0] — 2026-07-08 — Модуль saas, этап 1: saas.entitlements (бэклог v2)
 
 > Второй бизнес-модуль после commerce. Строится по одной фиче; первая —

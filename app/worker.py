@@ -159,6 +159,15 @@ async def purge_retention(ctx: dict[str, Any]) -> dict[str, int]:
             purge_expired_notifications, ctx["maintenance_sessions"], settings
         ),
     }
+    if "saas" in settings.enabled_module_list:
+        # saas.metering usage counters (feature retention, cross-tenant as
+        # app_maintenance). Imported lazily so the worker never hard-depends on the
+        # feature — only swept when the saas module is enabled.
+        from modules.saas.metering.retention import purge_expired_usage
+
+        counts["saas_usage_counters"] = await _drain(
+            purge_expired_usage, ctx["maintenance_sessions"], settings
+        )
     logger.info("retention sweep complete", **counts)
     return counts
 

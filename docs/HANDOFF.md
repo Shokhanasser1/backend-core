@@ -7,16 +7,44 @@
 
 ## ⚑ Актуальное состояние и следующий шаг (читать первым)
 
-- **Голова:** последний тег **`v0.9.0`** — фича `saas.entitlements` ПРИНЯТА,
-  закоммичена, запушена в origin (`github.com/Shokhanasser1/backend-core`). Рабочее
-  дерево чистое. **336 тестов зелёные (+7), покрытие 94.04%**, ruff/mypy strict/
-  import-linter чисто, миграции всех веток обратимы (+`saas_entitlements`).
-- **Готово:** V1 (ядро + commerce + конструктор, теги `v0.1.0`…`v0.6.1`) + все три
-  элемента бэклога v1.1 (`v0.7.0`/`v0.7.1`/`v0.8.0`) + `saas.entitlements` (`v0.9.0`).
-- **СЛЕДУЮЩИЙ ШАГ:** **этап 2 модуля `saas` — фича `saas.metering`** (учёт
-  потребления по событиям шины → агрегаты в БД). Затем этап 3 — `saas.onboarding`
-  (чек-лист активации). Детали и утверждённые решения — в «## Модуль saas → этап 1
-  построен» и «## Что дальше → модуль saas».
+- **Голова:** последний тег **`v0.10.0`** — фича `saas.metering` ПРИНЯТА,
+  закоммичена, запушена в origin. Рабочее дерево чистое. **342 теста зелёные (+6),
+  покрытие 94.20%**, ruff/mypy strict (161 файл)/import-linter чисто, миграции всех
+  веток обратимы (+`saas_metering`).
+- **Готово:** V1 (теги `v0.1.0`…`v0.6.1`) + бэклог v1.1 (`v0.7.0`/`v0.7.1`/`v0.8.0`)
+  + `saas.entitlements` (`v0.9.0`).
+- **СЛЕДУЮЩИЙ ШАГ:** приёмка `saas.metering`, затем **этап 3 модуля `saas` —
+  фича `saas.onboarding`** (чек-лист активации тенанта; данные, обновляемые по
+  событиям). Детали и утверждённые решения этапов 1–2 — в разделах ниже.
+
+## Модуль saas → этап 2: saas.metering (ПРИНЯТ, тег v0.10.0, запушен)
+
+Учёт потребления (usage). Решения Фаза-0-стиля **утверждены владельцем** (с учётом
+механики шины): **(1) источник — публичный `MeteringService.record()`, НЕ подписки
+на шину** (фичам запрещён wildcard — `shared/events.py`, `WILDCARD_ALLOWED_TOP_PACKAGE
+= "core"`; `handler_id`=module+qualname уникален → generic-подписка хрупка и зашивала
+бы чужие имена событий → вызывающий код метит явно); **(2) metering и entitlements
+НЕЗАВИСИМЫ** (лимиты-счётчики остаются в entitlements через `current_count`).
+
+- **`saas.metering`** (`modules/saas/metering/`, requires core auth/tenants; НЕ
+  billing) — счётчики по метрикам, агрегаты по дням.
+  - **Таблица** `saas_usage_counters` (тенантная RLS, ветка `saas_metering`): одна
+    строка на `(tenant, metric_key, bucket-день)`, `value` bigint, атомарный UPSERT
+    (`ON CONFLICT DO UPDATE value=value+delta` — без read-modify-write гонки).
+  - **`MeteringService`:** `record(metric, delta, at=)` (в транзакции вызывающего;
+    effectively-once, если звать из reliable-обработчика), `usage`/`summary` (окно
+    дней). Право `saas.usage:read` (owner/admin), роут `GET /api/saas/usage/me`.
+  - **Ретенция:** `purge_expired_usage` (app_maintenance, батчами) вписана в
+    воркерную `purge_retention` **условно** — `if "saas" in enabled_module_list`
+    (ленивый импорт; app→modules легально; no-op при выключенном saas). Конфиг
+    `SAAS_USAGE_RETENTION_DAYS` (400).
+  - Событий не публикует/не слушает (чистый примитив, `publishes/listens = []`).
+- **Замечание по прогону (на будущее):** НЕ запускать два testcontainers-прогона
+  параллельно (полный + отдельный) — конкуренция за ресурсы/соединения подвешивает
+  набор (наблюдалось: полный прогон завис на ~90% при 0 CPU, пока рядом шёл
+  `test_migrations`). Чистый последовательный перезапуск прошёл (342/94.20%).
+
+## Модуль saas → этап 1: saas.entitlements (ПРИНЯТ, тег v0.9.0, запушен)
 
 ## Модуль saas → этап 1: saas.entitlements (ПРИНЯТ, тег v0.9.0, запушен)
 

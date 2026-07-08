@@ -12,16 +12,18 @@
 | Фича | Назначение | Требует |
 |------|-----------|---------|
 | `saas.entitlements` | Права тарифа: feature flags + числовые лимиты, активный набор тенанта | core `auth`, `tenants`, `billing` |
+| `saas.metering` | Учёт потребления: счётчики по метрикам, агрегаты по дням | core `auth`, `tenants` |
 
-Планируются (строятся по одной, по команде владельца — не заготавливаются
-заранее): `saas.metering` (учёт потребления по событиям шины → агрегаты в БД) и
-`saas.onboarding` (чек-лист активации тенанта). Все три — горизонтально
-независимы (нет `requires_features` между ними), переносятся по отдельности.
+Планируется (строится по команде владельца — не заготавливается заранее):
+`saas.onboarding` (чек-лист активации тенанта). Фичи — горизонтально независимы
+(нет `requires_features` между ними), переносятся по отдельности.
 
 ## Рецепты сборки
 
 - **Лимиты и фичефлаги тарифов:** `entitlements` (наполнить тарифную сетку
   seed-миграцией — см. `entitlements/README.md`).
+- **Учёт потребления:** `metering` (вызывающий код метит через
+  `MeteringService.record(...)` — см. `metering/README.md`).
 
 Перенос в клиентский проект — `tools/add-feature`:
 
@@ -43,6 +45,10 @@ python -m tools.add_feature saas.entitlements /path/to/target
 - `saas.entitlements` → `EntitlementService`: `is_enabled` / `get_limit` /
   `require_within_limit` / `snapshot`. Соседние бизнес-фичи (напр. `commerce`)
   enforce'ят лимиты тарифа, вызывая сервис, не читая таблицы saas.
+- `saas.metering` → `MeteringService`: `record(metric, delta)` (учесть потребление)
+  / `usage` / `summary`. Вызывающий код метит явно; metering не подписывается на
+  шину (генеричный примитив, не зашивает чужие имена событий). Независим от
+  `entitlements`.
 
 ## Как добавить новую фичу
 

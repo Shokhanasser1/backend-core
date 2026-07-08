@@ -1,0 +1,7 @@
+name = "saas.metering"
+description = "Учёт потребления (usage): счётчики по метрикам, агрегаты по дням."
+requires_features = []
+requires_core = ["auth", "tenants"]
+owns_tables = ["saas_usage_counters"]
+publishes_events = []
+listens_events = []
