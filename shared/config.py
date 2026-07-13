@@ -135,6 +135,10 @@ class Settings(BaseSettings):
     # the worker's daily retention job (as app_maintenance), only when saas is
     # enabled. ~13 months so a full year of monthly reports stays queryable.
     saas_usage_retention_days: int = 400
+    # saas.onboarding checklist: comma-separated step keys, in display order. The
+    # client defines its activation journey (empty = no checklist). complete_step
+    # rejects a key outside this set; progress reports "X of N".
+    saas_onboarding_steps: str = ""
 
     @property
     def files_allowed_content_type_list(self) -> tuple[str, ...]:
@@ -151,6 +155,10 @@ class Settings(BaseSettings):
     @property
     def enabled_module_list(self) -> tuple[str, ...]:
         return _split_csv(self.enabled_modules)
+
+    @property
+    def saas_onboarding_step_list(self) -> tuple[str, ...]:
+        return _split_csv(self.saas_onboarding_steps)
 
     @property
     def secret_encryption_key_list(self) -> tuple[str, ...]:

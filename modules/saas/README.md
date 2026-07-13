@@ -13,10 +13,10 @@
 |------|-----------|---------|
 | `saas.entitlements` | Права тарифа: feature flags + числовые лимиты, активный набор тенанта | core `auth`, `tenants`, `billing` |
 | `saas.metering` | Учёт потребления: счётчики по метрикам, агрегаты по дням | core `auth`, `tenants` |
+| `saas.onboarding` | Чек-лист активации тенанта: прогресс по настраиваемым шагам | core `auth`, `tenants` |
 
-Планируется (строится по команде владельца — не заготавливается заранее):
-`saas.onboarding` (чек-лист активации тенанта). Фичи — горизонтально независимы
-(нет `requires_features` между ними), переносятся по отдельности.
+Фичи — горизонтально независимы (нет `requires_features` между ними), переносятся
+по отдельности.
 
 ## Рецепты сборки
 
@@ -24,6 +24,8 @@
   seed-миграцией — см. `entitlements/README.md`).
 - **Учёт потребления:** `metering` (вызывающий код метит через
   `MeteringService.record(...)` — см. `metering/README.md`).
+- **Чек-лист активации:** `onboarding` (шаги — конфигом `SAAS_ONBOARDING_STEPS`;
+  отмечаются `complete_step(...)`/POST — см. `onboarding/README.md`).
 
 Перенос в клиентский проект — `tools/add-feature`:
 
@@ -49,6 +51,9 @@ python -m tools.add_feature saas.entitlements /path/to/target
   / `usage` / `summary`. Вызывающий код метит явно; metering не подписывается на
   шину (генеричный примитив, не зашивает чужие имена событий). Независим от
   `entitlements`.
+- `saas.onboarding` → `OnboardingService`: `complete_step(step)` (идемпотентно) /
+  `progress`. Шаги отмечаются явно (glue/фичи на вехе или POST от фронта); шаблон
+  чек-листа — конфигом. Публикует `saas.onboarding.completed` на последнем шаге.
 
 ## Как добавить новую фичу
 

@@ -1,0 +1,7 @@
+name = "saas.onboarding"
+description = "Чек-лист активации тенанта: прогресс по настраиваемым шагам."
+requires_features = []
+requires_core = ["auth", "tenants"]
+owns_tables = ["saas_onboarding_progress"]
+publishes_events = ["saas.onboarding.completed"]
+listens_events = []

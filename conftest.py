@@ -286,6 +286,23 @@ def saas_client(
 
 
 @pytest.fixture
+def saas_onboarding_client(
+    test_settings: Settings, role_urls: dict[str, str], _clean_db: None
+) -> Iterator[TestClient]:
+    """saas_client with a configured onboarding checklist (SAAS_ONBOARDING_STEPS),
+    so the /me + complete-step routes have a step set to report against."""
+    settings = test_settings.model_copy(
+        update={
+            "enabled_modules": "saas",
+            "saas_onboarding_steps": "create_shop,add_product,connect_payment",
+        }
+    )
+    application = create_app(settings)
+    with TestClient(application) as test_client:
+        yield test_client
+
+
+@pytest.fixture
 def commerce_payments_client(
     test_settings: Settings, role_urls: dict[str, str], _clean_db: None
 ) -> Iterator[TestClient]:

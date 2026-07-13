@@ -5,6 +5,31 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.11.0] — 2026-07-08 — Модуль saas, этап 3: saas.onboarding (бэклог v2)
+
+> Чек-лист активации тенанта. Третья фича модуля saas — закрывает начальный объём
+> модуля (флаги, лимиты, usage, onboarding). Принято владельцем, тег `v0.11.0`.
+
+### Added
+
+- **Фича `saas.onboarding`** — чек-лист активации: прогресс по настраиваемым шагам.
+  `requires_core = auth, tenants`; горизонтально независима.
+- **`OnboardingService`** (публичный интерфейс, §1.2):
+  - `complete_step(step_key)` — отметить шаг выполненным (идемпотентно; ключ вне
+    конфигурации → `InvariantViolationError`/422). Публикует
+    `saas.onboarding.completed` **ровно один раз** — когда закрыт последний шаг.
+  - `progress()` — чек-лист: по одной записи на каждый сконфигурированный шаг +
+    `completed_count`/`total`/`is_complete`.
+- **Шаги отмечаются явно** (решение владельца): server-side glue / фичи на вехе +
+  аутентифицированный `POST /api/saas/onboarding/steps/{step}/complete` для фронта.
+  Onboarding НЕ подписывается на шину (фичам запрещён wildcard).
+- **Набор шагов — конфигом** `SAAS_ONBOARDING_STEPS` (клиент задаёт свой путь
+  активации; шаблон не зашивает; пусто = чек-листа нет).
+- **Таблица** `saas_onboarding_progress` — тенантная (RLS, ветка Alembic
+  `saas_onboarding`): строка на выполненный шаг (`(tenant, step_key)` уникальны).
+- **Права** `saas.onboarding:read` + `saas.onboarding:update` (owner/admin), роуты
+  `GET /api/saas/onboarding/me` + `POST …/steps/{step}/complete`.
+
 ## [0.10.0] — 2026-07-08 — Модуль saas, этап 2: saas.metering (бэклог v2)
 
 > Учёт потребления (usage). Вторая фича модуля saas. Построен по команде владельца
