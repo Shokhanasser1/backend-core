@@ -5,6 +5,33 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.12.0] — 2026-07-13 — Модуль crm, этап 1: crm.contacts (бэклог v2)
+
+> Третий бизнес-модуль шаблона (после commerce и saas). Первая, фундаментальная
+> фича — адресная книга. Принято владельцем, тег `v0.12.0` (356 тестов, 94.61%).
+
+### Added
+
+- **Модуль `crm`** (`modules/crm/`) — лёгкий CRM поверх ядра (`auth`, `tenants`),
+  независим от commerce. Собирается загрузчиком из фич, включается `ENABLED_MODULES=crm`.
+  Согласованный состав (строится по одной): `contacts` → `deals` → `tasks`.
+- **Фича `crm.contacts`** — адресная книга: две сущности одного тенанта, люди
+  (`contact`) и организации (`company`); contact опционально привязан к company
+  того же тенанта. `requires_core = auth, tenants`; горизонтально независима.
+- **`ContactsService`** (публичный интерфейс, §1.2) — CRUD компаний и контактов;
+  `list_contacts` фильтруется по `company_id`. Соседи (`deals`/`tasks` — позже)
+  читают людей/компании через сервис, не через таблицы.
+- **Связь contact→company** — внутрифичевый FK с `ON DELETE SET NULL`: удаление
+  компании отвязывает её контакты (не блокирует). Существование `company_id`
+  проверяется тенант-скоупным репозиторием → чужой/несуществующий id = 404.
+- **Таблицы** `crm_companies` + `crm_contacts` — тенантные (RLS, ветка Alembic
+  `crm_contacts`), FK на `tenants` (`ON DELETE RESTRICT`).
+- **Права** `crm.company:{read,create,update,delete}` +
+  `crm.contact:{read,create,update,delete}`; owner/admin — всё, member — всё кроме
+  delete. Роуты `/api/crm/companies` и `/api/crm/contacts` (CRUD).
+- **События** `crm.company.{created,updated,deleted}` /
+  `crm.contact.{created,updated,deleted}`.
+
 ## [0.11.0] — 2026-07-08 — Модуль saas, этап 3: saas.onboarding (бэклог v2)
 
 > Чек-лист активации тенанта. Третья фича модуля saas — закрывает начальный объём

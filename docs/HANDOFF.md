@@ -7,18 +7,40 @@
 
 ## ⚑ Актуальное состояние и следующий шаг (читать первым)
 
-- **Голова:** последний тег **`v0.10.0`** (`saas.metering`, в origin). **Построена
-  (ждёт приёмки владельцем, НЕ закоммичена) фича `saas.onboarding`** — этап 3 модуля
-  `saas`, закрывает начальный объём модуля (флаги, лимиты, usage, onboarding).
-  **348 тестов зелёные (+6), покрытие 94.35%**, ruff/mypy strict (172 файла)/
-  import-linter чисто, миграции всех веток обратимы (+`saas_onboarding`). После
-  приёмки — коммит + тег **`v0.11.0`** + push.
+- **Голова:** последний тег **`v0.12.0`** (`crm.contacts`, в origin). Модуль `saas`
+  (начальный объём v2) завершён и принят; **модуль `crm` НАЧАТ**, этап 1 —
+  `crm.contacts` (адресная книга: люди+компании) — **ПРИНЯТ владельцем, тег
+  `v0.12.0`**. **356 тестов зелёные, покрытие 94.61%**, ruff/mypy strict/
+  import-linter чисто, миграции всех веток обратимы (+`crm_contacts`).
 - **Готово:** V1 (теги `v0.1.0`…`v0.6.1`) + бэклог v1.1 (`v0.7.0`/`v0.7.1`/`v0.8.0`)
-  + saas `entitlements` (`v0.9.0`) + `metering` (`v0.10.0`).
-- **СЛЕДУЮЩИЙ ШАГ:** приёмка `saas.onboarding`; **модуль saas (начальный объём v2)
-  завершён**. Дальше — по команде владельца: модуль `crm`, `tg-bot-template`,
-  реальный клиентский проект, или доработки saas (напр. admin-CRUD тарифной сетки,
-  «лимиты за период», generic feature-cron хук). Решения этапов 1–3 — в разделах ниже.
+  + saas `entitlements` (`v0.9.0`) / `metering` (`v0.10.0`) / `onboarding` (`v0.11.0`)
+  + crm `contacts` (`v0.12.0`).
+- **СЛЕДУЮЩИЙ ШАГ:** этап 2 модуля crm — **`crm.deals`** (сделки + воронка, requires
+  contacts); согласованный состав crm: contacts → deals → tasks. Либо по команде
+  владельца: `crm.tasks`, `tg-bot-template`, реальный клиентский проект, доработки
+  saas. Решения по crm.contacts — в разделе ниже; решения saas — далее.
+
+## Модуль crm → этап 1 ПРИНЯТ: crm.contacts (тег v0.12.0)
+
+Третий бизнес-модуль (`modules/crm/`), независим от commerce. Состав согласован
+Фаза-0-стиль (AskUserQuestion): **contacts → deals → tasks**, строим по одной; шаг 1
+— люди + компании в ОДНОЙ фиче.
+
+- **`crm.contacts`** (requires core auth/tenants; горизонтально независима) — две
+  тенантные таблицы `crm_companies` + `crm_contacts` (RLS, одна ветка Alembic
+  `crm_contacts`). Связь contact→company — внутрифичевый FK `ON DELETE SET NULL`
+  (удаление компании отвязывает контакты, не блокирует); `company_id` проверяется
+  тенант-скоупным репозиторием → чужой/несуществующий id = 404.
+- **`ContactsService`** (публичный §1.2): CRUD компаний и контактов;
+  `list_contacts(page, company_id=)`. Соседи (deals/tasks — позже) читают через сервис.
+- **PATCH-семантика** как у commerce.products: `None`=не менять; очистка поля в null
+  в v1 не выражается (задокументировано в README/schemas).
+- **Права** `crm.company:{read,create,update,delete}` + `crm.contact:{…}`; owner/admin
+  — всё, member — всё кроме delete (обяз. негатив: member→403 на DELETE). Роуты
+  `/api/crm/companies` + `/api/crm/contacts`. События `crm.company.*`/`crm.contact.*`.
+- **Новый бизнес-модуль — без правок ядра:** загрузчик работает generically по
+  `ENABLED_MODULES` (CORE_MODULES не трогали, requires_core=auth/tenants уже там);
+  фикстура `crm_client` добавлена в корневой conftest.
 
 ## Модуль saas → этап 3 построен: saas.onboarding (ждёт приёмки, тег v0.11.0)
 

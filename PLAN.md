@@ -43,7 +43,7 @@ crm, saas и другие — см. бэклог.
 | ✅ Превью/тумбнейлы к product_images | Pillow за портом `ThumbnailPort`, синхронно при attach, `?size=thumb` | продолжение v1.1 (тег `v0.7.1`) |
 | ✅ Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов (сервер→сервер checkout, подписанные вебхуки) | v1.1 (тег `v0.8.0`) |
 | ✅ Модуль saas | ✅ `entitlements` (флаги+лимиты) · ✅ `metering` (usage) · ✅ `onboarding` (чек-лист) — начальный объём v2 закрыт | v2 |
-| Модуль crm | Контакты, компании, сделки, воронка, задачи, таймлайн | v2 |
+| Модуль crm (в работе) | ✅ `crm.contacts` (люди+компании); далее `deals` (воронка), `tasks` | v2 |
 | tg-bot-template | Sibling-шаблон: aiogram поверх API этого же ядра | отдельный репозиторий |
 | Идеи будущих модулей | booking (записи: клиники, салоны, курсы), delivery, loyalty | по спросу клиентов |
 | Фронтенд админки | Отдельный проект поверх admin-API | по спросу |
@@ -51,6 +51,27 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-13 — **Модуль `crm` НАЧАТ (третий бизнес-модуль, бэклог v2), этап 1 —
+  фича `crm.contacts` ПРИНЯТА, закоммичена, тег `v0.12.0`.** Перед
+  кодом — Фаза-0-стиль согласование через AskUserQuestion: владелец утвердил состав
+  `contacts → deals → tasks` (строим по одной с приёмкой), шаг 1 — люди + компании
+  в ОДНОЙ фиче (contact опц. привязан к company), модуль **независим от commerce**.
+  **`crm.contacts`** (requires core auth/tenants; горизонтально независима): две
+  тенантные таблицы `crm_companies` + `crm_contacts` (RLS, одна ветка Alembic
+  `crm_contacts`), связь contact→company — внутрифичевый FK `ON DELETE SET NULL`
+  (удаление компании отвязывает контакты, не блокирует); существование `company_id`
+  проверяется тенант-скоупным репозиторием → чужой id = 404. Публичный
+  `ContactsService`: CRUD компаний и контактов, `list_contacts(page, company_id=)`.
+  PATCH-семантика как у commerce.products (`None`=не менять; очистка в null в v1 не
+  выражается — задокументировано). Права `crm.company:{read,create,update,delete}` +
+  `crm.contact:{…}`; owner/admin — всё, member — всё кроме delete (отсюда обяз.
+  негатив: member→403 на DELETE). Роуты `/api/crm/companies` + `/api/crm/contacts`.
+  События `crm.company.*` / `crm.contact.*`; ничего не слушает. Новый бизнес-модуль
+  подключается без правок ядра (загрузчик generically по `ENABLED_MODULES`; фикстура
+  `crm_client` в conftest). Проверки: **356 тестов зелёные, покрытие 94.61%** (вся
+  фича 100%), ruff/mypy strict/import-linter чисто, миграции всех веток обратимы
+  (+`crm_contacts`). Приёмка владельцем пройдена (тесты зелёные) → далее этап 2
+  `crm.deals` (сделки + воронка).
 - 2026-07-08 — **Модуль `saas`, этап 3 — фича `saas.onboarding` ПРИНЯТА,
   закоммичена, тег `v0.11.0`.** Чек-лист активации тенанта — закрывает
   начальный объём модуля saas (v2: флаги, лимиты, usage, onboarding). Решение

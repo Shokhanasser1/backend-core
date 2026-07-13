@@ -1,0 +1,14 @@
+name = "crm.contacts"
+description = "CRM-адресная книга: люди (contacts) и организации (companies)."
+requires_features = []
+requires_core = ["auth", "tenants"]
+owns_tables = ["crm_companies", "crm_contacts"]
+publishes_events = [
+    "crm.company.created",
+    "crm.company.updated",
+    "crm.company.deleted",
+    "crm.contact.created",
+    "crm.contact.updated",
+    "crm.contact.deleted",
+]
+listens_events = []
