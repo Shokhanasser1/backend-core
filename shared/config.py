@@ -140,6 +140,14 @@ class Settings(BaseSettings):
     # rejects a key outside this set; progress reports "X of N".
     saas_onboarding_steps: str = ""
 
+    # --- crm module (business module; features gated by ENABLED_MODULES=crm) ---
+    # crm.deals pipeline stages: comma-separated stage keys, in funnel order. The
+    # client defines its own funnel (e.g. lead,qualified,proposal,won,lost); the
+    # template hardwires none. A deal's stage must be one of these; creating a deal
+    # without an explicit stage lands on the first. Empty = deals unusable (create
+    # raises), so a client enabling crm.deals must set this.
+    crm_deal_stages: str = ""
+
     @property
     def files_allowed_content_type_list(self) -> tuple[str, ...]:
         return _split_csv(self.files_allowed_content_types)
@@ -159,6 +167,10 @@ class Settings(BaseSettings):
     @property
     def saas_onboarding_step_list(self) -> tuple[str, ...]:
         return _split_csv(self.saas_onboarding_steps)
+
+    @property
+    def crm_deal_stage_list(self) -> tuple[str, ...]:
+        return _split_csv(self.crm_deal_stages)
 
     @property
     def secret_encryption_key_list(self) -> tuple[str, ...]:

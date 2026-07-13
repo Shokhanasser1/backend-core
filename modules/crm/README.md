@@ -8,18 +8,21 @@
 
 ## Фичи
 
-| Фича | Назначение | requires_core |
-|------|-----------|---------------|
-| `crm.contacts` | Адресная книга: люди (contacts) + организации (companies) | `auth`, `tenants` |
+| Фича | Назначение | requires |
+|------|-----------|----------|
+| `crm.contacts` | Адресная книга: люди (contacts) + организации (companies) | core `auth`, `tenants` |
+| `crm.deals` | Сделки + воронка по настраиваемым стадиям | feature `crm.contacts` |
 
 Планируется (строится по команде владельца — не заготавливается заранее):
-`crm.deals` (сделки + воронка, requires contacts) и `crm.tasks` (задачи/активности,
-requires contacts). Состав согласован, порядок: contacts → deals → tasks.
+`crm.tasks` (задачи/активности, requires contacts). Состав согласован, порядок:
+contacts → deals → tasks.
 
 ## Рецепты сборки
 
 - **Адресная книга:** `contacts` (люди/компании через `ContactsService`; связь
   contact→company с `ON DELETE SET NULL` — см. `contacts/README.md`).
+- **Воронка продаж:** `deals` (стадии — конфигом `CRM_DEAL_STAGES`; суммы Money;
+  связь с контактом/компанией через `ContactsService` — см. `deals/README.md`).
 
 Перенос в клиентский проект — `tools/add-feature`:
 
@@ -34,6 +37,9 @@ python -m tools.add_feature crm.contacts /path/to/target
 - `crm.contacts` → `ContactsService`: CRUD компаний и контактов; `list_contacts`
   фильтруется по `company_id`. Соседние фичи читают людей/компании через сервис,
   не через таблицы. Публикует `crm.company.*` / `crm.contact.*`.
+- `crm.deals` → `DealService`: CRUD сделок; стадии из `CRM_DEAL_STAGES`, суммы
+  Money, связи валидируются через `ContactsService`. Публикует `crm.deal.*`
+  (включая `crm.deal.stage_changed`).
 
 ## Как добавить новую фичу
 

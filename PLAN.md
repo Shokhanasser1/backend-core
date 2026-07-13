@@ -43,7 +43,7 @@ crm, saas и другие — см. бэклог.
 | ✅ Превью/тумбнейлы к product_images | Pillow за портом `ThumbnailPort`, синхронно при attach, `?size=thumb` | продолжение v1.1 (тег `v0.7.1`) |
 | ✅ Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов (сервер→сервер checkout, подписанные вебхуки) | v1.1 (тег `v0.8.0`) |
 | ✅ Модуль saas | ✅ `entitlements` (флаги+лимиты) · ✅ `metering` (usage) · ✅ `onboarding` (чек-лист) — начальный объём v2 закрыт | v2 |
-| Модуль crm (в работе) | ✅ `crm.contacts` (люди+компании); далее `deals` (воронка), `tasks` | v2 |
+| Модуль crm (в работе) | ✅ `crm.contacts` (люди+компании) · ✅ `crm.deals` (сделки+воронка); далее `tasks` | v2 |
 | tg-bot-template | Sibling-шаблон: aiogram поверх API этого же ядра | отдельный репозиторий |
 | Идеи будущих модулей | booking (записи: клиники, салоны, курсы), delivery, loyalty | по спросу клиентов |
 | Фронтенд админки | Отдельный проект поверх admin-API | по спросу |
@@ -51,6 +51,26 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-07-13 — **Модуль `crm`, этап 2 — фича `crm.deals` ПРИНЯТА, закоммичена, тег
+  `v0.13.0`.** Сделки + воронка. Решения Фаза-0-стиля (утв.
+  владельцем через AskUserQuestion): **(1) стадии воронки — конфигом** `CRM_DEAL_STAGES`
+  (клиент задаёт свою; шаблон не зашивает; стадия обязана быть из набора; без явной
+  стадии — первая; пусто = create падает 422 — та же логика, что у onboarding-шагов);
+  **(2) сумма — Money** (целые минимальные единицы + `currency`, валидация по
+  CurrencyRegistry, без float — как commerce); **(3) связь — contact и/или company,
+  обе опциональны.** Фича `crm.deals` (requires_features=`crm.contacts`, requires_core
+  auth/tenants): таблица `crm_deals` (тенантная RLS, ветка `crm_deals`, CHECK
+  amount>=0). `contact_id`/`company_id` — «голые» Uuid БЕЗ межфичевого FK, существование
+  валидируется через публичный `ContactsService.get_contact/get_company` (чужой id →
+  404; тот же паттерн, что commerce.cart→ProductService). `DealService` строится в deps
+  на том же bundle, что и ContactsService (одна транзакция). Публичный интерфейс: CRUD +
+  `list(stage=,contact_id=,company_id=)`; PATCH-семантика (`None`=не менять). Права
+  `crm.deal:{read,create,update,delete}` (owner/admin — всё, member — кроме delete),
+  роуты `/api/crm/deals`. События `crm.deal.{created,updated,deleted}` +
+  `crm.deal.stage_changed` (`{deal_id,from,to}` при смене стадии). Проверки: **366
+  тестов зелёные, покрытие 94.83%** (вся фича 100%), ruff/mypy strict/import-linter
+  чисто, миграции всех веток обратимы. Приёмка владельцем пройдена (тесты зелёные) →
+  далее этап 3 `crm.tasks` (задачи/активности).
 - 2026-07-13 — **Модуль `crm` НАЧАТ (третий бизнес-модуль, бэклог v2), этап 1 —
   фича `crm.contacts` ПРИНЯТА, закоммичена, тег `v0.12.0`.** Перед
   кодом — Фаза-0-стиль согласование через AskUserQuestion: владелец утвердил состав

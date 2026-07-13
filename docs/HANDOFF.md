@@ -7,18 +7,38 @@
 
 ## ⚑ Актуальное состояние и следующий шаг (читать первым)
 
-- **Голова:** последний тег **`v0.12.0`** (`crm.contacts`, в origin). Модуль `saas`
-  (начальный объём v2) завершён и принят; **модуль `crm` НАЧАТ**, этап 1 —
-  `crm.contacts` (адресная книга: люди+компании) — **ПРИНЯТ владельцем, тег
-  `v0.12.0`**. **356 тестов зелёные, покрытие 94.61%**, ruff/mypy strict/
-  import-linter чисто, миграции всех веток обратимы (+`crm_contacts`).
+- **Голова:** последний тег **`v0.13.0`** (`crm.deals`, в origin). Модуль `crm`,
+  этап 2 — `crm.deals` (сделки + воронка, requires `crm.contacts`) — **ПРИНЯТ
+  владельцем, тег `v0.13.0`**. **366 тестов зелёные, покрытие 94.83%** (вся фича
+  100%), ruff/mypy strict/import-linter чисто, миграции всех веток обратимы
+  (+`crm_deals`).
 - **Готово:** V1 (теги `v0.1.0`…`v0.6.1`) + бэклог v1.1 (`v0.7.0`/`v0.7.1`/`v0.8.0`)
   + saas `entitlements` (`v0.9.0`) / `metering` (`v0.10.0`) / `onboarding` (`v0.11.0`)
   + crm `contacts` (`v0.12.0`).
-- **СЛЕДУЮЩИЙ ШАГ:** этап 2 модуля crm — **`crm.deals`** (сделки + воронка, requires
-  contacts); согласованный состав crm: contacts → deals → tasks. Либо по команде
-  владельца: `crm.tasks`, `tg-bot-template`, реальный клиентский проект, доработки
-  saas. Решения по crm.contacts — в разделе ниже; решения saas — далее.
+- **СЛЕДУЮЩИЙ ШАГ:** приёмка `crm.deals`; затем этап 3 модуля crm — **`crm.tasks`**
+  (задачи/активности, requires contacts). Согласованный состав crm: contacts → deals
+  → tasks. Либо по команде владельца: `tg-bot-template`, реальный клиентский проект,
+  доработки saas. Решения по crm — в разделах ниже; решения saas — далее.
+
+## Модуль crm → этап 2 ПРИНЯТ: crm.deals (тег v0.13.0)
+
+Сделки + воронка. Решения Фаза-0-стиль **утверждены владельцем** (AskUserQuestion):
+стадии воронки — конфигом `CRM_DEAL_STAGES`; сумма — Money (minor units + currency);
+связь — contact и/или company, обе опциональны.
+
+- **`crm.deals`** (`modules/crm/deals/`, requires_features=`crm.contacts`) — таблица
+  `crm_deals` (тенантная RLS, ветка `crm_deals`, CHECK amount>=0). `contact_id`/
+  `company_id` — «голые» Uuid БЕЗ межфичевого FK, существование валидируется через
+  публичный `ContactsService.get_contact/get_company` (чужой id → 404; паттерн
+  commerce.cart→ProductService; DealService строится в deps на том же bundle).
+- **`DealService`:** `create` (стадия по умолчанию = первая сконфигурированная; вне
+  набора → 422; пусто = 422), `update` (PATCH `None`=не менять), `get`/`list(stage=,
+  contact_id=,company_id=)`/`delete`. Суммы — Money (валидация по CurrencyRegistry).
+  Права `crm.deal:{read,create,update,delete}` (owner/admin — всё, member — кроме
+  delete), роуты `/api/crm/deals`. События `crm.deal.{created,updated,deleted}` +
+  `crm.deal.stage_changed` (`{deal_id,from,to}`).
+- Фикстуры: `crm_deals_client` (crm + CRM_DEAL_STAGES + UZS-сид) и
+  `crm_deals_no_stages_client` (пустые стадии → тест чистого 422).
 
 ## Модуль crm → этап 1 ПРИНЯТ: crm.contacts (тег v0.12.0)
 

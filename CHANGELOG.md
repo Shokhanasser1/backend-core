@@ -5,6 +5,31 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.13.0] — 2026-07-13 — Модуль crm, этап 2: crm.deals (бэклог v2)
+
+> Сделки и воронка. Вторая фича модуля crm (requires crm.contacts). Принято
+> владельцем, тег `v0.13.0` (366 тестов, 94.83%).
+
+### Added
+
+- **Фича `crm.deals`** — сделки (opportunities) по настраиваемым стадиям воронки.
+  `requires_features = ["crm.contacts"]`; `requires_core = auth, tenants`.
+- **`DealService`** (публичный интерфейс, §1.2): `create` / `update` / `get` /
+  `list(page, stage=, contact_id=, company_id=)` / `delete`. Суммы — Money (целые
+  минимальные единицы + `currency`, валидация по CurrencyRegistry, без `float`).
+- **Стадии воронки — конфигом** `CRM_DEAL_STAGES` (клиент задаёт свою воронку;
+  шаблон не зашивает). Стадия сделки обязана быть из набора; создание без явной
+  стадии кладёт на первую; пусто = create падает `422`.
+- **Связь с crm.contacts** — `contact_id`/`company_id` (обе опциональны), «голые»
+  Uuid без межфичевого FK; существование валидируется через публичный
+  `ContactsService` (чужой/несуществующий id → `404`), таблицы соседа не читаются.
+- **Таблица** `crm_deals` — тенантная (RLS, ветка Alembic `crm_deals`),
+  `CHECK (amount >= 0)`, FK на `tenants` (`ON DELETE RESTRICT`).
+- **Права** `crm.deal:{read,create,update,delete}`; owner/admin — всё, member —
+  всё кроме delete. Роуты `/api/crm/deals` (CRUD, фильтры в списке).
+- **События** `crm.deal.{created,updated,deleted}` + `crm.deal.stage_changed`
+  (`{deal_id, from, to}` — при смене стадии).
+
 ## [0.12.0] — 2026-07-13 — Модуль crm, этап 1: crm.contacts (бэклог v2)
 
 > Третий бизнес-модуль шаблона (после commerce и saas). Первая, фундаментальная

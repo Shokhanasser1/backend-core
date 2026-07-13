@@ -319,6 +319,71 @@ def crm_client(
 
 
 @pytest.fixture
+def crm_deals_client(
+    test_settings: Settings, role_urls: dict[str, str], _clean_db: None
+) -> Iterator[TestClient]:
+    """crm_client + a configured pipeline (CRM_DEAL_STAGES) + a seeded UZS currency.
+
+    crm.deals validates a deal's amount against the currency registry (loaded at
+    lifespan from the currencies table), so UZS must exist; and its funnel is
+    configuration, so stages must be set for the routes to be usable. Enabling crm
+    also mounts crm.contacts (the required sibling), so deals can link to a contact."""
+
+    async def _seed() -> None:
+        engine = create_async_engine(role_urls[ROLE_MIGRATOR])
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO currencies (code, exponent, name) VALUES ('UZS', 0, 'Som') "
+                        "ON CONFLICT (code) DO NOTHING"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+    settings = test_settings.model_copy(
+        update={
+            "enabled_modules": "crm",
+            "crm_deal_stages": "lead,qualified,proposal,won,lost",
+        }
+    )
+    application = create_app(settings)
+    with TestClient(application) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def crm_deals_no_stages_client(
+    test_settings: Settings, role_urls: dict[str, str], _clean_db: None
+) -> Iterator[TestClient]:
+    """crm enabled and UZS seeded, but CRM_DEAL_STAGES left empty — a client that
+    configured currencies yet forgot its funnel. Creating a deal without a stage must
+    fail cleanly on the funnel (422), not 500."""
+
+    async def _seed() -> None:
+        engine = create_async_engine(role_urls[ROLE_MIGRATOR])
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO currencies (code, exponent, name) VALUES ('UZS', 0, 'Som') "
+                        "ON CONFLICT (code) DO NOTHING"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+    application = create_app(
+        test_settings.model_copy(update={"enabled_modules": "crm", "crm_deal_stages": ""})
+    )
+    with TestClient(application) as test_client:
+        yield test_client
+
+
+@pytest.fixture
 def commerce_payments_client(
     test_settings: Settings, role_urls: dict[str, str], _clean_db: None
 ) -> Iterator[TestClient]:

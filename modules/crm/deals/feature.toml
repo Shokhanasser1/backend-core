@@ -1,0 +1,12 @@
+name = "crm.deals"
+description = "Сделки и воронка: opportunities по настраиваемым стадиям."
+requires_features = ["crm.contacts"]
+requires_core = ["auth", "tenants"]
+owns_tables = ["crm_deals"]
+publishes_events = [
+    "crm.deal.created",
+    "crm.deal.updated",
+    "crm.deal.deleted",
+    "crm.deal.stage_changed",
+]
+listens_events = []
