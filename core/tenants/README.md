@@ -34,6 +34,9 @@ owner/admin/member. Реализует `PermissionResolver` для `core/auth` (
 
 `tenants.tenant:read|update`, `tenants.member:read|invite|remove|update_role`,
 `tenants.role:read|manage`. Раскладка по системным ролям — в `permissions.py`.
+Методы тенант-контекста проверяют право и в сервисе (`PermissionGuard`):
+`TenantService` сам является резолвером прав и отдаёт свой `access` бандлу запроса
+(одно разрешение прав на запрос).
 
 ## События (публикует)
 

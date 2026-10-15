@@ -5,6 +5,24 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [Unreleased]
+
+### Security
+
+- [SECURITY] RBAC и внутри сервисов ядра и saas (`PermissionGuard`), не только на
+  роутах: `TenantService` (чтение/правка тенанта, участники, приглашения, роли),
+  `BillingService`/`PaymentService.list_providers`, `FileService`,
+  `AuditService.search`, а также обзоры saas (`summary`, `snapshot`, `progress`).
+  Интерфейсы для соседей и джоб (`create_payment`, `mark_*`, `record`, лимиты,
+  `complete_step`) — без guard. `TenantService` проверяет права через собственный
+  резолвер и делит его с бандлом запроса.
+
+### Upgrade notes
+
+- Код клиента, вызывающий эти сервисы от имени пользователя (`Actor(kind="user")`)
+  в обход роутов, должен передавать `access=` (`bundle.access`) — иначе 403;
+  внутренние вызовы (джобы, подписчики шины) не затронуты.
+
 ## [0.14.0] — 2026-10-15 — Аудит: безопасность и логика (hardening)
 
 > Полный аудит шаблона (ядро, модули, цепочка поставок, CI): вредоносного кода

@@ -2,8 +2,9 @@
 
 Built on the authenticated ServiceBundle so billing shares the request's unit of
 work and tenant context; providers/settings/bus come from ``app.state`` (wired in
-the lifespan) so core never imports app. The permission check lives on the route
-(``require_permission``); this dependency only assembles the services.
+the lifespan) so core never imports app. The permission is checked on the route
+(``require_permission``) and again in the services (the request's AccessService
+is passed in).
 """
 
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ async def billing_services(
         bundle.ctx,
         providers=state.payment_providers,
         settings=state.settings,
+        access=bundle.access,
     )
-    billing = BillingService(bundle.uow, state.bus, bundle.ctx, payments=payments)
+    billing = BillingService(
+        bundle.uow, state.bus, bundle.ctx, payments=payments, access=bundle.access
+    )
     return BillingServices(billing=billing, payments=payments)

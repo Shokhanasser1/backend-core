@@ -17,6 +17,9 @@ idempotent instead of a unique-index collision.
 
 from datetime import UTC, datetime
 
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
+from modules.saas.onboarding import permissions as perms
 from modules.saas.onboarding.models import OnboardingProgress
 from modules.saas.onboarding.repository import OnboardingRepository
 from modules.saas.onboarding.schemas import OnboardingProgressDTO, OnboardingStepDTO
@@ -29,12 +32,22 @@ from shared.service import Service, UnitOfWork
 
 class OnboardingService(Service):
     def __init__(
-        self, uow: UnitOfWork, bus: EventBus, ctx: TenantContext, *, steps: tuple[str, ...]
+        self,
+        uow: UnitOfWork,
+        bus: EventBus,
+        ctx: TenantContext,
+        *,
+        steps: tuple[str, ...],
+        access: AccessService | None = None,
     ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._repo = OnboardingRepository(uow.session, ctx)
         self._steps = steps
+        # Only the checklist read (progress) is RBAC-checked: complete_step is the
+        # server-side API glue code calls at a milestone under whatever actor
+        # triggered it (the HTTP route checks saas.onboarding:update itself).
+        self._guard = PermissionGuard(access, ctx)
 
     async def complete_step(self, step_key: str) -> OnboardingProgressDTO:
         """Mark ``step_key`` done (idempotent). Rejects a step outside the configured
@@ -55,6 +68,7 @@ class OnboardingService(Service):
         return self._to_dto(completed)
 
     async def progress(self) -> OnboardingProgressDTO:
+        await self._guard.require(perms.ONBOARDING_READ)
         return self._to_dto(await self._completed())
 
     async def _completed(self) -> dict[str, datetime]:

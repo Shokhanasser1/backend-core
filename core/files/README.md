@@ -41,7 +41,8 @@ SVG/HTML не проходят, поэтому inline-отдача XSS-безо�
 ## Права (владеет)
 
 `files.file:read`, `files.file:upload`, `files.file:delete` (owner/admin — всё,
-member — только read).
+member — только read). Проверяются и в сервисе (`PermissionGuard`), в том числе
+когда `FileService` вызывает соседняя фича (product_images) от имени пользователя.
 
 ## События
 

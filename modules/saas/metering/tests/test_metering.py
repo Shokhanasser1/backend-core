@@ -33,8 +33,10 @@ pytestmark = pytest.mark.integration
 
 
 def _ctx(tenant_id: UUID) -> TenantContext:
+    # Service-level calls as an internal actor: these tests cover aggregation and
+    # isolation; RBAC of the read side is covered by the route + guard tests.
     return TenantContext(
-        tenant_id=tenant_id, actor=Actor(kind="user", id=str(uuid4())), request_id=None
+        tenant_id=tenant_id, actor=Actor(kind="system", id=f"test-{uuid4()}"), request_id=None
     )
 
 

@@ -119,7 +119,10 @@ async def ctx(role_urls: dict[str, str], _clean_db: None) -> TenantContext:
         {"id": tenant_id, "slug": str(tenant_id), "owner": user_id},
     )
     return TenantContext(
-        tenant_id=tenant_id, actor=Actor(kind="user", id=str(user_id)), request_id="req"
+        # Internal actor: billing logic under test; RBAC has its own tests.
+        tenant_id=tenant_id,
+        actor=Actor(kind="system", id=f"billing-test-{user_id}"),
+        request_id="req",
     )
 
 

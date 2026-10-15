@@ -32,6 +32,9 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
+from modules.saas.entitlements import permissions as perms
 from modules.saas.entitlements.models import PlanEntitlement, TenantEntitlement
 from modules.saas.entitlements.repository import TenantEntitlementRepository
 from modules.saas.entitlements.schemas import EntitlementsDTO
@@ -43,10 +46,20 @@ from shared.service import Service, UnitOfWork
 
 
 class EntitlementService(Service):
-    def __init__(self, uow: UnitOfWork, bus: EventBus, ctx: TenantContext) -> None:
+    def __init__(
+        self,
+        uow: UnitOfWork,
+        bus: EventBus,
+        ctx: TenantContext,
+        *,
+        access: AccessService | None = None,
+    ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._repo = TenantEntitlementRepository(uow.session, ctx)
+        # Only the overview (snapshot, the /me read) is RBAC-checked: flags/limits
+        # are the sibling API, asked by other features under any actor.
+        self._guard = PermissionGuard(access, ctx)
 
     # --- public: reads for sibling features and the /me route ---
 
@@ -101,6 +114,7 @@ class EntitlementService(Service):
 
     async def snapshot(self) -> EntitlementsDTO:
         """All flags + limits of the active plan (for GET /me / a UI wizard)."""
+        await self._guard.require(perms.ENTITLEMENT_READ)
         plan = await self.effective_plan_code()
         flags: dict[str, bool] = {}
         limits: dict[str, int | None] = {}

@@ -26,6 +26,7 @@ async def product_image_service(
         storage=state.file_storage,
         thumbnailer=state.file_thumbnailer,
         settings=state.settings,
+        access=bundle.access,
     )
     return ProductImageService(
         bundle.uow, state.bus, bundle.ctx, products=products, files=files, access=bundle.access

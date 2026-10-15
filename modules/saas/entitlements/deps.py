@@ -15,4 +15,4 @@ from modules.saas.entitlements.service import EntitlementService
 async def entitlement_service(
     request: Request, bundle: ServiceBundle = Depends(authed_bundle)
 ) -> EntitlementService:
-    return EntitlementService(bundle.uow, request.app.state.bus, bundle.ctx)
+    return EntitlementService(bundle.uow, request.app.state.bus, bundle.ctx, access=bundle.access)

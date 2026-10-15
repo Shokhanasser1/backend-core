@@ -14,4 +14,4 @@ from modules.saas.metering.service import MeteringService
 async def metering_service(
     request: Request, bundle: ServiceBundle = Depends(authed_bundle)
 ) -> MeteringService:
-    return MeteringService(bundle.uow, request.app.state.bus, bundle.ctx)
+    return MeteringService(bundle.uow, request.app.state.bus, bundle.ctx, access=bundle.access)

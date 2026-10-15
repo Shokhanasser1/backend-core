@@ -19,6 +19,9 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
+from modules.saas.metering import permissions as perms
 from modules.saas.metering.models import UsageCounter
 from shared.context import TenantContext
 from shared.errors import InvariantViolationError
@@ -30,12 +33,22 @@ _MAX_METRIC_KEY_LEN = 128
 
 
 class MeteringService(Service):
-    def __init__(self, uow: UnitOfWork, bus: EventBus, ctx: TenantContext) -> None:
+    def __init__(
+        self,
+        uow: UnitOfWork,
+        bus: EventBus,
+        ctx: TenantContext,
+        *,
+        access: AccessService | None = None,
+    ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         if ctx.tenant_id is None:
             raise InvariantViolationError("metering requires a tenant context")
         self._tenant_id = ctx.tenant_id
+        # Only the overview (summary, the /me read) is RBAC-checked: record/usage
+        # are the sibling API, called by other features under any actor.
+        self._guard = PermissionGuard(access, ctx)
 
     async def record(self, metric_key: str, delta: int = 1, *, at: datetime | None = None) -> None:
         """Add ``delta`` to the tenant's counter for ``metric_key`` on the UTC day of
@@ -74,6 +87,7 @@ class MeteringService(Service):
         self, *, since: date | None = None, until: date | None = None
     ) -> dict[str, int]:
         """Per-metric totals for the tenant over an optional day window (for GET /me)."""
+        await self._guard.require(perms.USAGE_READ)
         stmt = (
             select(UsageCounter.metric_key, func.sum(UsageCounter.value))
             .where(UsageCounter.tenant_id == self._tenant_id)

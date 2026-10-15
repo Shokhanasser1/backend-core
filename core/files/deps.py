@@ -2,8 +2,8 @@
 
 Shares the request's unit of work and tenant context; the bus, storage backend
 and settings come from app.state (wired in the lifespan) so core never imports
-app. The permission check lives on the route (require_permission); this only
-assembles the service.
+app. The permission is checked on the route (require_permission) and again in the
+service (the request's AccessService is passed in).
 """
 
 from fastapi import Depends, Request
@@ -23,4 +23,5 @@ async def file_service(
         storage=state.file_storage,
         thumbnailer=state.file_thumbnailer,
         settings=state.settings,
+        access=bundle.access,
     )

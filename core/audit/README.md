@@ -31,7 +31,9 @@ maintenance=True)`: подключение любого модуля НЕ тре
 
 ## Права (владеет)
 
-`audit.record:read` (owner/admin).
+`audit.record:read` (owner/admin) — проверяется и в `AuditService.search`
+(`PermissionGuard`); запись (`record`/`record_event`) — интерфейс всех модулей и
+шины, без guard.
 
 ## Как расширять
 

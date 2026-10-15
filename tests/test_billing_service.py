@@ -109,7 +109,9 @@ async def billing_ctx(role_urls: dict[str, str], _clean_db: None) -> TenantConte
     tenant_id, user_id = await _seed_reference_and_tenant(role_urls)
     return TenantContext(
         tenant_id=tenant_id,
-        actor=Actor(kind="user", id=str(user_id)),
+        # Internal actor: these tests cover the billing logic; RBAC is covered by
+        # tests/test_billing_api.py and tests/test_service_guards.py.
+        actor=Actor(kind="system", id=f"billing-test-{user_id}"),
         request_id="req-billing",
     )
 

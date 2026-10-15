@@ -126,8 +126,8 @@ async def _open_bundle(
                 ),
             ),
             tenants=tenants,
-            access=AccessService(tenants),
-            audit=AuditService(uow.session, ctx),
+            access=tenants.access,  # one permission resolution per request
+            audit=AuditService(uow.session, ctx, access=tenants.access),
             uow=uow,
         )
         yield bundle

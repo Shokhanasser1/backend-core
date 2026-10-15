@@ -41,8 +41,9 @@ await entitlements.require_within_limit("commerce.product", count)
 
 ## Права
 
-`saas.entitlement:read` — обзор entitlements тенанта (owner/admin). Enforcement
-лимитов идёт через сервис в вызывающей фиче, не через это право.
+`saas.entitlement:read` — обзор entitlements тенанта (owner/admin); проверяется и в
+`snapshot` (`PermissionGuard`). Enforcement лимитов идёт через сервис в вызывающей
+фиче, не через это право (флаги/лимиты — API для соседей, без guard).
 
 ## События
 

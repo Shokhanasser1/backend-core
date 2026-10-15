@@ -39,7 +39,9 @@
 ## Права
 
 `saas.onboarding:read` + `saas.onboarding:update` (owner/admin — активация это
-задача настройки организации).
+задача настройки организации). `progress` проверяет `saas.onboarding:read` и в
+сервисе (`PermissionGuard`); `complete_step` — серверный API для glue-кода (его
+вызывают на вехе от имени любого актора), поэтому право `update` проверяет роут.
 
 ## Таблица
 

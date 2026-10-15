@@ -8,6 +8,11 @@ accept_invitation — must be constructed with a maintenance-bound unit of work
 A suspended tenant grants nothing: permission resolution and the membership
 check behind the tenant-token exchange both require ``tenants.status = active``,
 so an already-issued tenant token stops working on the next request.
+
+Tenant-context methods are RBAC-checked here as well as on the route
+(PermissionGuard). TenantService IS the permission resolver, so it guards itself
+through its own ``access`` (shared with the request bundle, one resolution per
+request).
 """
 
 from collections.abc import Sequence
@@ -18,6 +23,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from core.audit.service import AuditService
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
+from core.tenants import permissions as perms
 from core.tenants.models import Invitation, Membership, Role, RolePermission, Tenant
 from core.tenants.notifications import InvitationMailer
 from core.tenants.permissions import ROLE_OWNER
@@ -68,6 +76,13 @@ class TenantService(Service):
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._invitation_mailer = invitation_mailer
+        self._access = AccessService(self)
+        self._guard = PermissionGuard(self._access, ctx)
+
+    @property
+    def access(self) -> AccessService:
+        """The RBAC reader backed by this service (the request bundle reuses it)."""
+        return self._access
 
     # ------------------------------------------------------------------ reads
     async def get_permission_codes(self, user_id: UUID) -> frozenset[str]:
@@ -124,6 +139,7 @@ class TenantService(Service):
         return _membership_dto(membership, role_code)
 
     async def get_tenant(self) -> TenantDTO:
+        await self._guard.require(perms.TENANT_READ)
         tenant = await self._session.get(Tenant, self.ctx.tenant_id)
         if tenant is None:
             raise NotFoundError("tenant not found")
@@ -142,6 +158,7 @@ class TenantService(Service):
         return [_tenant_dto(t) for t in tenants]
 
     async def list_members(self, page: Page) -> PageResult[MembershipDTO]:
+        await self._guard.require(perms.MEMBER_READ)
         stmt = (
             select(Membership, Role.code)
             .join(Role, Role.id == Membership.role_id)
@@ -248,6 +265,7 @@ class TenantService(Service):
     async def update_tenant(
         self, *, name: str | None = None, default_locale: str | None = None
     ) -> TenantDTO:
+        await self._guard.require(perms.TENANT_UPDATE)
         tenant = await self._session.get(Tenant, self.ctx.tenant_id)
         if tenant is None:
             raise NotFoundError("tenant not found")
@@ -261,6 +279,7 @@ class TenantService(Service):
     async def invite_member(self, email: str, role: str) -> InvitationDTO:
         """Create an invitation and queue its email. The one-time token travels
         only inside the emailed accept link; the caller never sees it."""
+        await self._guard.require(perms.MEMBER_INVITE)
         if self._invitation_mailer is None:
             raise InvariantViolationError("invitations require an invitation mailer")
         tenant = await self._session.get(Tenant, self.ctx.tenant_id)
@@ -312,6 +331,7 @@ class TenantService(Service):
         )
 
     async def revoke_invitation(self, invitation_id: UUID) -> None:
+        await self._guard.require(perms.MEMBER_INVITE)
         repo = InvitationRepository(self._session, self.ctx)
         invitation = await repo.get_or_raise(invitation_id)
         if invitation.status != "pending":
@@ -320,6 +340,7 @@ class TenantService(Service):
         await self._session.flush()
 
     async def change_member_role(self, user_id: UUID, role: str) -> MembershipDTO:
+        await self._guard.require(perms.MEMBER_UPDATE_ROLE)
         membership = await self._member_or_raise(user_id)
         new_role = await self._tenant_or_system_role(role)
         if new_role.code != ROLE_OWNER:
@@ -333,6 +354,7 @@ class TenantService(Service):
         return _membership_dto(membership, new_role.code)
 
     async def remove_member(self, user_id: UUID) -> None:
+        await self._guard.require(perms.MEMBER_REMOVE)
         membership = await self._member_or_raise(user_id)
         await self._guard_last_owner(user_id, "remove")
         event_id = self.emit(

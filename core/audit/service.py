@@ -20,7 +20,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.audit.models import AuditLog
+from core.audit.permissions import RECORD_READ
 from core.audit.schemas import AuditQuery, AuditRecordDTO
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
 from shared.context import RequestContext, TenantContext
 from shared.events import EventEnvelope
 from shared.ids import new_uuid7
@@ -42,9 +45,14 @@ def _actor_user_id(ctx: TenantContext) -> UUID | None:
 
 
 class AuditService:
-    def __init__(self, session: AsyncSession, ctx: TenantContext) -> None:
+    def __init__(
+        self, session: AsyncSession, ctx: TenantContext, *, access: AccessService | None = None
+    ) -> None:
         self._session = session
         self._ctx = ctx
+        # Only the read side (search) is RBAC-checked; record/record_event are the
+        # write interface every module and the bus sink use, under any actor.
+        self._guard = PermissionGuard(access, ctx)
 
     async def record(
         self,
@@ -99,6 +107,7 @@ class AuditService:
         """Paginated read for the tenant's admin activity log. Scoped to the
         current tenant explicitly (first line) and by RLS (second line); system
         rows (tenant_id NULL) are never visible to a tenant admin."""
+        await self._guard.require(RECORD_READ)
         conditions = [AuditLog.tenant_id == self._ctx.tenant_id]
         if query.action_prefix:
             # autoescape neutralises %/_ so a user-supplied prefix is a literal.

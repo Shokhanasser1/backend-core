@@ -19,4 +19,5 @@ async def onboarding_service(
         request.app.state.bus,
         bundle.ctx,
         steps=request.app.state.settings.saas_onboarding_step_list,
+        access=bundle.access,
     )

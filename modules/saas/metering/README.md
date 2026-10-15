@@ -34,8 +34,9 @@ await metering.record("commerce.order_paid")
 
 ## Права
 
-`saas.usage:read` — обзор потребления тенанта (owner/admin). Запись (`record`) —
-серверный вызов сервиса, роута/права не требует.
+`saas.usage:read` — обзор потребления тенанта (owner/admin); проверяется и в
+`summary` (`PermissionGuard`). Запись (`record`) и `usage` — серверный API для
+соседей, права не требуют.
 
 ## Таблица
 

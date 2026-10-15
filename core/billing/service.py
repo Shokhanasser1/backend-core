@@ -14,6 +14,12 @@ live one with the paid one; a failed/canceled/abandoned checkout drops the
 pending one and the free plan simply stays. A ended paid period (no recurring
 charge in v1) closes the subscription and falls back to the free plan.
 
+Route-facing methods (plans, providers, subscription read/start/cancel) are
+RBAC-checked here as well as on the route (PermissionGuard). ``create_payment``
+and the ``mark_*`` finalizers are interfaces for siblings, webhooks and jobs —
+e.g. a storefront buyer pays an order without any billing permission — so they
+carry no guard.
+
 Callers that transition a payment hold its row lock (``SELECT ... FOR UPDATE``):
 the webhook processor and the expiry sweep lock before reading the status, so a
 concurrent transition is waited for and re-checked, never overwritten.
@@ -30,6 +36,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from core.audit.service import AuditService
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
+from core.billing import permissions as perms
 from core.billing.models import Payment, Plan, Subscription
 from core.billing.periods import period_end
 from core.billing.ports import PaymentProvider
@@ -135,14 +144,17 @@ class PaymentService(Service):
         *,
         providers: Mapping[str, PaymentProvider],
         settings: Settings,
+        access: AccessService | None = None,
     ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._payments = PaymentRepository(uow.session, ctx)
         self._providers = providers
         self._settings = settings
+        self._guard = PermissionGuard(access, ctx)
 
     async def list_providers(self) -> Sequence[PaymentProviderInfo]:
+        await self._guard.require(perms.PLAN_READ)
         return [
             PaymentProviderInfo(code=code, title_key=f"payment.provider.{code}", enabled=True)
             for code in self._settings.enabled_payment_provider_list
@@ -393,13 +405,16 @@ class BillingService(Service):
         ctx: TenantContext,
         *,
         payments: PaymentService,
+        access: AccessService | None = None,
     ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._subscriptions = SubscriptionRepository(uow.session, ctx)
         self._payments = payments
+        self._guard = PermissionGuard(access, ctx)
 
     async def list_plans(self) -> Sequence[PlanDTO]:
+        await self._guard.require(perms.PLAN_READ)
         rows = (
             (
                 await self._session.execute(
@@ -413,6 +428,7 @@ class BillingService(Service):
 
     async def get_subscription(self) -> SubscriptionDTO | None:
         """The live subscription; a pending checkout only when nothing is live."""
+        await self._guard.require(perms.SUBSCRIPTION_READ)
         rows = await self._subscriptions.find(
             Subscription.status.in_((*LIVE_SUBSCRIPTION_STATES, "pending")), page=None
         )
@@ -436,6 +452,7 @@ class BillingService(Service):
         """Open a paid checkout. The tenant's live (e.g. free) subscription stays
         live until the payment succeeds. Repeating the same checkout returns it;
         another plan/provider waits until the open one is paid or expires."""
+        await self._guard.require(perms.SUBSCRIPTION_MANAGE)
         plan = await self._plan_by_code(plan_code)
         if plan.price_amount == 0:
             raise InvariantViolationError("a free plan is assigned automatically, not purchased")
@@ -476,6 +493,7 @@ class BillingService(Service):
         )
 
     async def cancel_subscription(self) -> SubscriptionDTO:
+        await self._guard.require(perms.SUBSCRIPTION_MANAGE)
         sub = await self._subscriptions.find(
             Subscription.status.in_(LIVE_SUBSCRIPTION_STATES), page=None
         )

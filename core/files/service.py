@@ -2,13 +2,19 @@
 
 Validates uploads at the trust boundary (size cap + magic-bytes allowlist, the
 client Content-Type is never trusted), stores the bytes in the configured backend
-and keeps the tenant-scoped metadata row. Sibling features (commerce.product_images)
-call this — they never read the ``files`` table. Events fire post-commit.
+and keeps the tenant-scoped metadata row. RBAC is checked here as well as on the
+route (PermissionGuard) — also when a sibling (product_images) acts for a user:
+storing or deleting a file needs the files permission either way. Sibling
+features (commerce.product_images) call this — they never read the ``files``
+table. Events fire post-commit.
 """
 
 import hashlib
 from uuid import UUID
 
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
+from core.files import permissions as perms
 from core.files.content_types import sniff_content_type
 from core.files.models import StoredFile
 from core.files.ports import StoragePort, ThumbnailPort
@@ -48,6 +54,7 @@ class FileService(Service):
         storage: StoragePort,
         thumbnailer: ThumbnailPort,
         settings: Settings,
+        access: AccessService | None = None,
     ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
@@ -55,6 +62,7 @@ class FileService(Service):
         self._storage = storage
         self._thumbnailer = thumbnailer
         self._settings = settings
+        self._guard = PermissionGuard(access, ctx)
 
     @property
     def max_upload_bytes(self) -> int:
@@ -68,6 +76,7 @@ class FileService(Service):
         ``declared_content_type`` (the client's claim) is intentionally ignored for
         the decision — the content type is sniffed from the bytes and checked
         against the allowlist."""
+        await self._guard.require(perms.FILE_UPLOAD)
         if not data:
             raise InvariantViolationError("uploaded file is empty")
         if len(data) > self._settings.files_max_upload_bytes:
@@ -119,15 +128,18 @@ class FileService(Service):
 
     async def get(self, file_id: UUID) -> FileDTO:
         """Metadata only (404 for a foreign/missing file — RLS + repository)."""
+        await self._guard.require(perms.FILE_READ)
         return _to_dto(await self._repo.get_or_raise(file_id))
 
     async def open(self, file_id: UUID) -> tuple[FileDTO, bytes]:
         """Metadata + bytes, for streaming a download."""
+        await self._guard.require(perms.FILE_READ)
         stored = await self._repo.get_or_raise(file_id)
         data = await self._storage.get(stored.storage_key)
         return _to_dto(stored), data
 
     async def delete(self, file_id: UUID) -> None:
+        await self._guard.require(perms.FILE_DELETE)
         stored = await self._repo.get_or_raise(file_id)
         await self._repo.delete(stored)
         await self._session.flush()

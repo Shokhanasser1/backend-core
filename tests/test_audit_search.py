@@ -50,8 +50,13 @@ async def _add(
 async def _search(
     factory: async_sessionmaker[AsyncSession], ctx: TenantContext, query: AuditQuery, page: Page
 ) -> tuple[list[AuditRecordDTO], int]:
-    async with SqlAlchemyUnitOfWork(factory, context=ctx) as uow:
-        result = await AuditService(uow.session, ctx).search(query, page)
+    # The read as an internal actor: these tests cover filtering and isolation;
+    # the audit.record:read check is covered by the route + service-guard tests.
+    reader = TenantContext(
+        tenant_id=ctx.tenant_id, actor=Actor(kind="system", id="audit-test"), request_id=None
+    )
+    async with SqlAlchemyUnitOfWork(factory, context=reader) as uow:
+        result = await AuditService(uow.session, reader).search(query, page)
         return list(result.items), result.total
 
 

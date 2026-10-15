@@ -64,6 +64,9 @@ savepoint + чтение победителя; `return_url` — только а�
 ## Права (владеет)
 
 `billing.plan:read`, `billing.subscription:read`, `billing.subscription:manage`.
+Проверяются и в сервисе (`PermissionGuard`): тарифы, провайдеры, чтение/старт/
+отмена подписки. `create_payment` и финализаторы `mark_*` — интерфейс для соседей,
+вебхуков и джоб (покупатель оплачивает заказ без прав billing), без guard.
 
 ## События
 

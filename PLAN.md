@@ -52,6 +52,20 @@ crm, saas и другие — см. бэклог.
 
 ## Журнал
 
+- 2026-10-15 — **DoD-доводка: права в сервисах ядра и saas — готово, ждёт приёмки,
+  НЕ закоммичено.** Правило CLAUDE.md «дублируй права в сервисе» после аудита
+  действовало только в фичах commerce/crm; теперь `PermissionGuard` и в
+  `TenantService` (сам резолвер прав, `access` общий с бандлом), `BillingService` /
+  `PaymentService.list_providers`, `FileService`, `AuditService.search` и в обзорах
+  saas (`MeteringService.summary`, `EntitlementService.snapshot`,
+  `OnboardingService.progress`). Без guard остаются интерфейсы для соседей и джоб
+  (`create_payment`, `mark_*`, `record`/`usage`, флаги/лимиты, `complete_step`).
+  Тесты: `tests/test_service_guards.py` (член без права и посторонний получают 403
+  в самом сервисе; несобранный без `AccessService` сервис отказывает),
+  `tests/test_saas_service_guards.py`; сервисные тесты логики billing/audit/metering
+  переведены на внутреннего актора. Проверки: **502 теста зелёные, покрытие ≈95.5%**,
+  ruff/mypy strict/import-linter чисто.
+
 - 2026-10-15 — **Аудит закрыт.** Пакет 5 (локальный конфиг Claude вне репозитория)
   отменён владельцем: работа ведётся только внутри проекта. Итог аудита — пакеты
   1–4, релиз `v0.14.0` (локальные теги `v0.13.0`, `v0.14.0`; ветка
