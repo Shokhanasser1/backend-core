@@ -54,7 +54,7 @@ def render_role_bootstrap_statements(passwords: dict[str, str] | None = None) ->
         # NOSUPERUSER + NOBYPASSRLS on every runtime role so RLS is enforced;
         # app_migrator owns the schema but is not a superuser either.
         statements.append(
-            f"DO $$ BEGIN "
+            f"DO $$ BEGIN "  # nosec B608 - role/password validated alphanumeric above
             f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{role}') THEN "
             f"CREATE ROLE {role} LOGIN PASSWORD '{password}' NOSUPERUSER NOBYPASSRLS NOINHERIT; "
             f"END IF; END $$"

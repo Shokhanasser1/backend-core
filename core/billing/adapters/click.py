@@ -172,4 +172,4 @@ class ClickProvider:
             ]
         )
         # md5 is mandated by the Click SHOP-API signature scheme; not our choice.
-        return hashlib.md5("".join(parts).encode()).hexdigest()  # noqa: S324
+        return hashlib.md5("".join(parts).encode()).hexdigest()  # noqa: S324  # nosec B324

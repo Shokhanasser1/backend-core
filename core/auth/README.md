@@ -26,6 +26,15 @@
   (email/phone/locale) — для соседей (billing/notifications) без чтения таблиц auth.
 - Роутер `/api/auth`.
 
+**Сброс пароля.** `request_password_reset` всегда отвечает `{"status": "ok"}` —
+и для существующего email, и для несуществующего (нет перечисления). Одноразовый
+токен уходит **только письмом**: шаблон `auth.password_reset` (ru/uz,
+`notifications.py`), ссылка — `PASSWORD_RESET_URL` с подстановкой `{token}`
+(токен во #фрагменте → не попадает в логи сервера). Письмо — платформенная
+отправка (`tenant_id NULL`), её пишет `PasswordResetMailer` отдельной короткой
+транзакцией под `app_maintenance`. Не более 3 писем на пользователя за 15 минут;
+сверх лимита запрос молча игнорируется (ошибка выдала бы существование email).
+
 ## События (публикует)
 
 `auth.user.registered`, `auth.user.login_succeeded`, `auth.user.login_failed`,

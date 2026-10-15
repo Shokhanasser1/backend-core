@@ -1,7 +1,9 @@
 # Multi-stage build: uv resolves the locked environment, the runtime image is
 # slim and runs as a non-root user (threat model V8).
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+FROM python:3.12-slim-bookworm AS builder
+# uv pinned to the version CI uses; same Python base as the runtime stage.
+COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 COPY pyproject.toml uv.lock ./

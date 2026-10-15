@@ -75,8 +75,9 @@ class TemplateRegistry:
         subst = {k: str(v) for k, v in params.items()}
         body = Template(self._read(base / locale / f"{key}.txt")).safe_substitute(subst)
         subject_path = base / locale / f"{key}.subject.txt"
+        # strip(): template files end with a newline, a Subject header must not.
         subject = (
-            Template(self._read(subject_path)).safe_substitute(subst)
+            Template(self._read(subject_path)).safe_substitute(subst).strip()
             if subject_path.exists()
             else None
         )

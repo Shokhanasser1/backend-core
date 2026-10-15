@@ -1,5 +1,7 @@
 # CI-конвейер шаблона: lint → mypy → tests → security-сканы → build + trivy.
 # Красный CI = не мержим.
+# Сторонние actions закреплены по commit SHA (тег можно перезаписать — так
+# крадут секреты CI); комментарий рядом — версия, которой соответствует SHA.
 
 name: CI
 
@@ -8,16 +10,21 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   UV_FROZEN: "1"
+  UV_VERSION: "0.11.26"
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: "3.12"
       - run: uv sync
       - name: Лок-файл синхронизирован с pyproject (V8)
@@ -31,12 +38,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: "3.12"
       - run: uv sync
-      - name: Тесты с покрытием (testcontainers: Postgres 16 + Redis 7)
+      - name: "Тесты с покрытием (testcontainers: Postgres 16 + Redis 7)"
         run: >
           uv run pytest
           --cov=app --cov=core --cov=shared --cov=modules --cov=tools
@@ -46,26 +54,29 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: "3.12"
       - name: pip-audit (известные CVE зависимостей)
         run: |
           uv export --format requirements-txt --no-emit-project -o requirements-ci.txt
-          uvx pip-audit -r requirements-ci.txt
-      - name: bandit (SAST)
-        run: uvx bandit -c pyproject.toml -r app shared migrations
+          uvx pip-audit@2.10.1 -r requirements-ci.txt
+      - name: bandit (SAST; блокируют medium+, low — в отчёте)
+        run: >
+          uvx bandit@1.9.4 -c pyproject.toml --severity-level medium
+          -r app core modules shared migrations tools
 
   gitleaks:
     # Секрет-сканер (решение ОВ-30): утечка секрета в шаблоне тиражируется
     # по всем клиентским проектам — главный самострел.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -73,11 +84,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, test]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Сборка образа
         run: docker build -t backend-core:${{ github.sha }} .
       - name: trivy-скан образа (CRITICAL/HIGH блокируют)
-        uses: aquasecurity/trivy-action@0.29.0
+        # v0.36.0: 0.31.0–0.34.0 уязвимы (GHSA-9p44-j4g5-cfx5).
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: backend-core:${{ github.sha }}
           format: table

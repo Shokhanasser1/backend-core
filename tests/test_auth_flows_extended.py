@@ -1,10 +1,15 @@
 """Extended auth + tenant flows: 2FA, password reset/change, logout, member
 management (interfaces §3.1/§3.2; threat model V2/V3)."""
 
+import asyncio
+
 import pyotp
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.notifications.models import NotificationOutbox
 from tests.test_auth_flows import (
     PASSWORD,
     _headers,
@@ -116,19 +121,30 @@ def test_logout_revokes_refresh(client: TestClient) -> None:
     )
 
 
-def test_password_reset_flow_no_enumeration(client: TestClient) -> None:
+async def _reset_emails(factory: async_sessionmaker[AsyncSession]) -> list[NotificationOutbox]:
+    async with factory() as session:
+        stmt = select(NotificationOutbox).where(
+            NotificationOutbox.template_key == "auth.password_reset"
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+
+def test_password_reset_token_is_emailed_never_returned(
+    client: TestClient, maintenance_session_factory: async_sessionmaker[AsyncSession]
+) -> None:
     _register(client, "pr@example.uz")
-    # Unknown and known emails both return 200 with no leak.
-    assert (
-        client.post(
-            "/api/auth/password-reset/request", json={"email": "nobody@example.uz"}
-        ).status_code
-        == 200
-    )
-    requested = client.post("/api/auth/password-reset/request", json={"email": "pr@example.uz"})
-    assert requested.status_code == 200
-    reset_token = requested.json()["reset_token"]
-    assert reset_token is not None
+    unknown = client.post("/api/auth/password-reset/request", json={"email": "nobody@example.uz"})
+    known = client.post("/api/auth/password-reset/request", json={"email": "pr@example.uz"})
+    # Identical bodies for known and unknown emails: no enumeration, no token leak.
+    assert unknown.status_code == known.status_code == 200
+    assert unknown.json() == known.json() == {"status": "ok"}
+
+    # The token travels only by email, as a platform send (no tenant).
+    emails = asyncio.run(_reset_emails(maintenance_session_factory))
+    assert len(emails) == 1
+    email = emails[0]
+    assert (email.channel, email.recipient, email.tenant_id) == ("email", "pr@example.uz", None)
+    reset_token = str(email.params["reset_url"]).split("token=", 1)[1]
 
     done = client.post(
         "/api/auth/password-reset",
@@ -141,6 +157,19 @@ def test_password_reset_flow_no_enumeration(client: TestClient) -> None:
         ).status_code
         == 200
     )
+
+
+def test_password_reset_emails_are_rate_limited_silently(
+    client: TestClient, maintenance_session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    _register(client, "flood@example.uz")
+    responses = [
+        client.post("/api/auth/password-reset/request", json={"email": "flood@example.uz"})
+        for _ in range(5)
+    ]
+    # Same answer every time (no oracle), but the victim's inbox is not flooded.
+    assert all(r.status_code == 200 and r.json() == {"status": "ok"} for r in responses)
+    assert len(asyncio.run(_reset_emails(maintenance_session_factory))) == 3
 
 
 def _member_of(client: TestClient, owner_tenant: str, tenant_id: str, email: str) -> str:

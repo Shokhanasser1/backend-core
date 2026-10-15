@@ -10,11 +10,14 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   drift:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -37,8 +40,9 @@ jobs:
 
       - name: "Проверка (а): общий предок с тегом шаблона сохранён"
         if: steps.detect.outputs.client == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
           if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
             echo "::error::Тег $TAG не найден в origin — выполните шаг 'git push origin $TAG' из docs/UPDATE.md"
             exit 1
@@ -51,8 +55,9 @@ jobs:
       - name: "Проверка (б): незадекларированный дрейф шаблонных путей (report-only)"
         if: steps.detect.outputs.client == 'true'
         continue-on-error: true
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
           git diff --name-only "$TAG" HEAD -- core/ shared/ modules/ > drift.txt || true
           if [ ! -s drift.txt ]; then
             echo "Дрейфа шаблонных путей нет."

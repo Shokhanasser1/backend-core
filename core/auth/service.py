@@ -14,6 +14,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.engine import CursorResult
 
 from core.auth.models import RefreshToken, User, UserRecoveryCode, UserTotp
+from core.auth.notifications import PasswordResetMailer
 from core.auth.rate_limit import (
     EphemeralTokenStore,
     LoginThrottle,
@@ -71,12 +72,14 @@ class AuthService(Service):
         redis: Redis,
         settings: Settings,
         cipher: SecretCipher,
+        reset_mailer: PasswordResetMailer,
     ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._users = UserRepository(uow.session)
         self._settings = settings
         self._cipher = cipher
+        self._reset_mailer = reset_mailer
         self._limiter = RateLimiter(redis)
         self._throttle = LoginThrottle(
             redis,
@@ -284,18 +287,26 @@ class AuthService(Service):
         await self._revoke_all_user_tokens(user.id, reason="password_change")
         self.emit("auth.user.password_changed", {"user_id": str(user.id)})
 
-    async def request_password_reset(self, email: str) -> str | None:
-        """Always succeeds silently (no user enumeration). Returns the raw reset
-        token for the caller to deliver (Phase 3: via NotificationService)."""
+    async def request_password_reset(self, email: str) -> None:
+        """Always succeeds silently (no user enumeration). The one-time token is
+        delivered only inside the emailed link — never returned or emitted."""
         user = await self._users.get_by_email(email.strip().lower())
         if user is None:
-            return None
+            return
+        # Over the limit: drop silently — an error would be an enumeration oracle,
+        # and the cap keeps the endpoint from being used to flood an inbox.
+        if not await self._limiter.hit("pwreset", str(user.id), limit=3, window_seconds=900):
+            return
         raw = new_opaque_token()
-        await self._resets.put(
-            hash_token(raw), str(user.id), ttl_seconds=self._settings.password_reset_ttl_seconds
+        ttl = self._settings.password_reset_ttl_seconds
+        await self._resets.put(hash_token(raw), str(user.id), ttl_seconds=ttl)
+        await self._reset_mailer.send(
+            email=user.email,
+            locale=user.locale,
+            reset_url=self._settings.password_reset_url.replace("{token}", raw),
+            ttl_minutes=ttl // 60,
         )
         self.emit("auth.user.password_reset_requested", {"user_id": str(user.id)})
-        return raw
 
     async def reset_password(self, reset_token: str, new_password: str) -> None:
         user_id_raw = await self._resets.consume(hash_token(reset_token))

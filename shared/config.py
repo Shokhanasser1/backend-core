@@ -6,10 +6,14 @@ without importing app — keeping the dependency direction app -> core -> shared
 """
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEV_JWT_SECRET = "dev-insecure-change-me"  # noqa: S105 - dev default, refused in prod
+_DEV_PASSWORD_RESET_URL = "http://localhost:3000/reset-password#token={token}"  # noqa: S105
+_MIN_JWT_SECRET_BYTES = 32  # HS256 key >= hash output size (RFC 7518 §3.2)
 
 
 class Settings(BaseSettings):
@@ -48,7 +52,7 @@ class Settings(BaseSettings):
     ready_check_timeout_seconds: float = 2.0
 
     # --- auth defaults (OV-11): overridable per project via env ---
-    jwt_secret: str = "dev-insecure-change-me"  # noqa: S105 - dev default, prod from env
+    jwt_secret: str = _DEV_JWT_SECRET  # dev default; prod must supply its own (see below)
     jwt_algorithm: str = "HS256"  # OV-17; strict allowlist of one (threat model V3)
     access_token_ttl_seconds: int = 600  # 10 minutes
     refresh_token_ttl_seconds: int = 2_592_000  # 30 days
@@ -56,6 +60,10 @@ class Settings(BaseSettings):
     login_lockout_seconds: int = 900  # 15 minutes, exponential up to this cap
     two_factor_challenge_ttl_seconds: int = 300
     password_reset_ttl_seconds: int = 3600
+    # Frontend page that completes a password reset; "{token}" is replaced with the
+    # one-time token in the emailed link. Keep the token in the #fragment: browsers
+    # never send it to servers, so it stays out of access logs and Referer headers.
+    password_reset_url: str = _DEV_PASSWORD_RESET_URL
     # Fernet key(s) for encrypting tenant/2FA secrets (OV-19). Comma-separated
     # for MultiFernet rotation; empty in dev = a deterministic dev key is used.
     secret_encryption_keys: str = ""
@@ -147,6 +155,32 @@ class Settings(BaseSettings):
     # without an explicit stage lands on the first. Empty = deals unusable (create
     # raises), so a client enabling crm.deals must set this.
     crm_deal_stages: str = ""
+
+    @field_validator("password_reset_url")
+    @classmethod
+    def _reset_url_carries_token(cls, value: str) -> str:
+        if "{token}" not in value:
+            raise ValueError("PASSWORD_RESET_URL must contain the {token} placeholder")
+        return value
+
+    @model_validator(mode="after")
+    def _prod_refuses_dev_defaults(self) -> Self:
+        """Dev defaults keep the stack zero-config; in prod each one is a hole
+        (forgeable JWTs, decryptable 2FA secrets, reset links to localhost), so
+        the process refuses to start instead of running insecurely."""
+        if self.app_env != "prod":
+            return self
+        problems = []
+        weak_jwt = len(self.jwt_secret.encode()) < _MIN_JWT_SECRET_BYTES
+        if self.jwt_secret == _DEV_JWT_SECRET or weak_jwt:
+            problems.append(f"JWT_SECRET must be random, >= {_MIN_JWT_SECRET_BYTES} bytes")
+        if not self.secret_encryption_key_list:
+            problems.append("SECRET_ENCRYPTION_KEYS must hold at least one Fernet key")
+        if self.password_reset_url == _DEV_PASSWORD_RESET_URL:
+            problems.append("PASSWORD_RESET_URL must point at the production frontend")
+        if problems:
+            raise ValueError("insecure production config: " + "; ".join(problems))
+        return self
 
     @property
     def files_allowed_content_type_list(self) -> tuple[str, ...]:

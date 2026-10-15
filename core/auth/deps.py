@@ -19,6 +19,7 @@ from fastapi import Depends, Request
 
 from core.audit.service import AuditService
 from core.auth.access_service import AccessService
+from core.auth.notifications import PasswordResetMailer
 from core.auth.security.tokens import decode_access_token
 from core.auth.service import AuthService
 from core.tenants.service import TenantService
@@ -109,6 +110,9 @@ async def _open_bundle(
                 redis=state.redis,
                 settings=state.settings,
                 cipher=state.cipher,
+                reset_mailer=PasswordResetMailer(
+                    database.maintenance_sessions, state.bus, state.cipher
+                ),
             ),
             tenants=tenants,
             access=AccessService(tenants),

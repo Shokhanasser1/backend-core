@@ -77,11 +77,10 @@ async def refresh(body: RefreshIn, bundle: ServiceBundle = Depends(public_bundle
 )
 async def request_password_reset(
     body: PasswordResetRequestIn, bundle: ServiceBundle = Depends(public_bundle)
-) -> dict[str, str | None]:
-    # Always the same response (no user enumeration). The raw token is returned
-    # here in v1 until Phase 3 delivers it via NotificationService.
-    token = await bundle.auth.request_password_reset(body.email)
-    return {"status": "ok", "reset_token": token}
+) -> dict[str, str]:
+    # Always the same response (no user enumeration); the token goes by email only.
+    await bundle.auth.request_password_reset(body.email)
+    return {"status": "ok"}
 
 
 @router.post(
