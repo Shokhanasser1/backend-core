@@ -9,9 +9,10 @@ is deleted, the bus subscriber (subscribers.py) clears the link on every deal, s
 no deal points at a person or company that no longer exists.
 
 RBAC is checked here as well as on the route (PermissionGuard). Events are emitted
-post-commit by the Service base. PATCH semantics: an argument left ``None`` leaves
-the field unchanged (template-wide convention); a link is removed explicitly with
-``clear_contact`` / ``clear_company`` (the route maps a JSON ``null`` onto them).
+post-commit by the Service base. PATCH semantics (``DealChanges``): a field left
+``None`` leaves it unchanged (template-wide convention); a link is removed
+explicitly with ``clear_contact`` / ``clear_company`` (the route maps a JSON
+``null`` onto them).
 """
 
 from uuid import UUID
@@ -24,7 +25,7 @@ from modules.crm.contacts import ContactsService
 from modules.crm.deals import permissions as perms
 from modules.crm.deals.models import Deal
 from modules.crm.deals.repository import DealRepository
-from modules.crm.deals.schemas import DealDTO
+from modules.crm.deals.schemas import DealChanges, DealDTO
 from shared.context import TenantContext
 from shared.errors import InvariantViolationError
 from shared.events import EventBus
@@ -35,6 +36,10 @@ from shared.service import Service, UnitOfWork
 
 def _to_dto(deal: Deal) -> DealDTO:
     return DealDTO.model_validate(deal)
+
+
+# DealChanges fields copied onto the deal when set (None = leave unchanged).
+_PATCHABLE = ("title", "amount", "currency", "stage", "contact_id", "company_id", "notes")
 
 
 class DealService(Service):
@@ -105,44 +110,23 @@ class DealService(Service):
         self.emit("crm.deal.created", {"deal_id": str(deal.id)})
         return _to_dto(deal)
 
-    async def update(
-        self,
-        deal_id: UUID,
-        *,
-        title: str | None = None,
-        amount: int | None = None,
-        currency: str | None = None,
-        stage: str | None = None,
-        contact_id: UUID | None = None,
-        company_id: UUID | None = None,
-        notes: str | None = None,
-        clear_contact: bool = False,
-        clear_company: bool = False,
-    ) -> DealDTO:
+    async def update(self, deal_id: UUID, changes: DealChanges) -> DealDTO:
         await self._guard.require(perms.DEAL_UPDATE)
         deal = await self._repo.get_or_raise(deal_id)
-        await self._validate_links(contact_id, company_id)
+        await self._validate_links(changes.contact_id, changes.company_id)
+        if changes.currency is not None:
+            currency_registry.exponent(changes.currency)
+        if changes.stage is not None:
+            self._require_stage(changes.stage)
         previous_stage = deal.stage
-        if title is not None:
-            deal.title = title
-        if amount is not None:
-            deal.amount = amount
-        if currency is not None:
-            currency_registry.exponent(currency)
-            deal.currency = currency
-        if stage is not None:
-            self._require_stage(stage)
-            deal.stage = stage
-        if contact_id is not None:
-            deal.contact_id = contact_id
-        elif clear_contact:
+        for field in _PATCHABLE:
+            value = getattr(changes, field)
+            if value is not None:
+                setattr(deal, field, value)
+        if changes.clear_contact and changes.contact_id is None:
             deal.contact_id = None
-        if company_id is not None:
-            deal.company_id = company_id
-        elif clear_company:
+        if changes.clear_company and changes.company_id is None:
             deal.company_id = None
-        if notes is not None:
-            deal.notes = notes
         Money(deal.amount, deal.currency)  # re-validate the resulting money
         await self._session.flush()
         self.emit("crm.deal.updated", {"deal_id": str(deal.id)})

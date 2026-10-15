@@ -1,6 +1,6 @@
 [project]
 name = "backend-core"
-version = "0.3.0"
+version = "0.14.0"
 description = "Переиспользуемый шаблон-конструктор бэкенда: ядро → модули → фичи (рынок УЗ/СНГ)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -60,7 +60,19 @@ select = [
     "RUF",              # ruff-специфичные
     "S",                # bandit-подмножество
     "ASYNC",            # async-ловушки
+    "C90",              # цикломатическая сложность (mccabe)
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915",  # возвраты/ветвления/аргументы/операторы
 ]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+# Пороги сложности: функция за ними — повод разрезать её, а не поднять порог.
+max-args = 8
+max-branches = 12
+max-returns = 6
+max-statements = 50
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S311", "S608"]

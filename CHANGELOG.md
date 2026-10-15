@@ -5,6 +5,86 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
+## [0.14.0] — 2026-10-15 — Аудит: безопасность и логика (hardening)
+
+> Полный аудит шаблона (ядро, модули, цепочка поставок, CI): вредоносного кода
+> нет; найденные дыры безопасности и логики закрыты пакетами с приёмкой
+> владельца. Релиз содержит ломающие изменения API — см. **Upgrade notes**.
+
+### Security
+
+- [SECURITY] Сброс пароля и приглашения: одноразовый токен больше не возвращается
+  в ответе API — только в ссылке из письма (`PASSWORD_RESET_URL`,
+  `INVITATION_ACCEPT_URL`, токен во #фрагменте). Приглашение принимает только
+  аккаунт с приглашённым email; приём одноразовый и под гонкой.
+- [SECURITY] `APP_ENV=prod` не стартует с dev-секретами/короткими ключами и
+  localhost-ссылками в письмах.
+- [SECURITY] Приостановленный тенант закрыт: права, обмен на tenant-токен, витрина.
+- [SECURITY] Заблокированный пользователь не обновит токен (семья отзывается) и не
+  завершит 2FA; обмен на tenant-токен не создаёт новую refresh-сессию;
+  recovery-код одноразовый под гонкой; счётчики лимитов атомарны (`INCR`+`EXPIRE NX`).
+- [SECURITY] HTTP-периметр: лимит тела запроса на входе (413), безопасный
+  `X-Request-ID`, задокументирован `FORWARDED_ALLOW_IPS` (per-IP лимиты за прокси).
+- [SECURITY] Платежи: гонки статусов закрыты `FOR UPDATE`; Stripe — окно подписи
+  300 с; сумма 0/мусор в вебхуке — «неверная сумма», а не пропуск сверки;
+  `return_url` валидируется; журнал отклонённых вебхуков ограничен.
+- [SECURITY] RBAC и в сервисах (`PermissionGuard`), не только на роуте.
+- [SECURITY] CI: actions закреплены по SHA, `permissions: read`, bandit; события
+  auth/tenants без email (ПД).
+
+### Fixed
+
+- Апгрейд с free-плана был невозможен (уникальный индекс считал `pending` живой
+  подпиской); подписки не закрывались на конце периода; поздняя оплата провайдера
+  после нашего истечения терялась; Payme `CheckTransaction` отдавал выдуманные
+  состояние/время; Click `Complete` с ошибкой подтверждал платёж.
+- `auth.user.login_failed` вообще не публиковался (откатывался вместе с запросом).
+- Чекаут корзины не создавал заказ; дубли активной корзины; переполнение количества;
+  оплаченный-после-отмены заказ; висячие ссылки сделок на удалённые контакты;
+  гонки лимитов entitlements и завершения onboarding.
+- `tools/add-feature --force` стирал установленные зависимости (и мог стереть
+  исходный проект); битый `feature.toml` ронял процесс; `TEMPLATE_VERSION` застрял
+  на `0.3.0` — CI клиентского проекта проверял дрейф не от того тега.
+
+### Added
+
+- `core/auth/guard.py` (`PermissionGuard`), `shared/locks.py`
+  (`advisory_xact_lock`), `Service.emit_now`, `Repository.find(for_update=)`,
+  `SystemRepository.get_one_or_none(for_update=)`.
+- Cron-джоба `close_ended_subscriptions` (free продлевается, платная закрывается с
+  откатом на free); события `billing.subscription.replaced|ended`.
+- Тест честности манифестов: `owns_tables`, события, `requires_core`; тест
+  согласованности версии; правила сложности ruff (C90/PLR); Dependabot.
+
+### Upgrade notes
+
+1. **Миграции:** `core_billing0002` (отдельные индексы live/pending подписки),
+   `commerce_cart0002` (одна активная корзина; дубли → `abandoned`).
+   `python -m migrations.cli upgrade heads`.
+2. **Новые переменные окружения:** `INVITATION_ACCEPT_URL` (обязательна в prod,
+   с `{token}`), `REGISTER_IP_LIMIT_PER_HOUR`, `MAX_REQUEST_BODY_BYTES`,
+   `FORWARDED_ALLOW_IPS` (адрес прокси для uvicorn). См. `.env.example`.
+3. **Ломающие изменения API (фронтенд):**
+   - `POST /api/tenants/invitations` — без `invitation_token` (токен — в письме);
+     `POST /api/tenants/invitations/accept` — только аккаунтом приглашённого email.
+   - `POST /api/auth/tenants/{id}/token` → `{access_token, token_type, expires_in}`
+     (без refresh); по истечении: `refresh` → обмен заново.
+   - `POST /api/commerce/cart/checkout` — тело `{provider}`, ответ 201
+     `{order_id, payment_id, provider, checkout_url}`.
+   - `GET /api/commerce/orders` → `PageResult` (`items/total/limit/offset`).
+   - Повторный `POST /api/billing/subscription` того же плана/провайдера отдаёт тот
+     же checkout; другой — 409, пока открытый не оплачен/не истёк.
+   - `/register` может ответить 429; тело запроса больше лимита — 413.
+4. **Ломающие изменения публичных интерфейсов (код клиента):**
+   `EntitlementService.require_within_limit(key, count)` — `count` теперь
+   async-функция; `DealService.update(deal_id, DealChanges)`;
+   `TenantService.invite_member` → `InvitationDTO`,
+   `accept_invitation(token, *, accepting_email)`; `ProviderCallback.amount`
+   может быть `None`; `PaymentDTO` получил `pending_at/closed_at/failure_code`;
+   сервисы фич принимают `access=` — при вызове пользователем без него — 403.
+5. Событие `billing.payment.succeeded` получило `late`; потребитель, отменивший
+   что-то на `billing.payment.expired`, решает, «оживлять» ли (orders — оживляет).
+
 ## [0.13.0] — 2026-07-13 — Модуль crm, этап 2: crm.deals (бэклог v2)
 
 > Сделки и воронка. Вторая фича модуля crm (requires crm.contacts). Принято

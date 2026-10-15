@@ -10,10 +10,11 @@ crm.contacts publishes a deletion (bus subscribers, registered by ``install()``)
 
 from modules.crm.deals.permissions import register_crm_deals_rbac
 from modules.crm.deals.router import router
-from modules.crm.deals.schemas import DealDTO
+from modules.crm.deals.schemas import DealChanges, DealDTO
 from modules.crm.deals.service import DealService
 
 __all__ = [
+    "DealChanges",
     "DealDTO",
     "DealService",
     "install",

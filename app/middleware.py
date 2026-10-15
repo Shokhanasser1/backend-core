@@ -65,6 +65,41 @@ class RequestIDMiddleware:
             structlog.contextvars.unbind_contextvars("request_id")
 
 
+class _CappedExchange:
+    """One request's receive/send pair with the body cap applied: reading past
+    ``limit`` raises PayloadTooLargeError; once that happened, the app's own
+    answer to the aborted read is swallowed so the middleware can send the 413
+    (``replaceable``) — unless a response had already started."""
+
+    def __init__(self, receive: Receive, send: Send, limit: int) -> None:
+        self._receive = receive
+        self._send = send
+        self._limit = limit
+        self._received = 0
+        self._overflow = False
+        self._started = False
+
+    @property
+    def replaceable(self) -> bool:
+        return self._overflow and not self._started
+
+    async def receive(self) -> Message:
+        message = await self._receive()
+        if message["type"] == "http.request":
+            self._received += len(message.get("body", b""))
+            if self._received > self._limit:
+                self._overflow = True
+                raise PayloadTooLargeError(f"request body over {self._limit} bytes")
+        return message
+
+    async def send(self, message: Message) -> None:
+        if self.replaceable:
+            return
+        if message["type"] == "http.response.start":
+            self._started = True
+        await self._send(message)
+
+
 class BodySizeLimitMiddleware:
     """Caps request bodies at the edge (413) before any handler buffers them:
     JSON is read whole and multipart uploads are spooled by Starlette, so a
@@ -93,34 +128,13 @@ class BodySizeLimitMiddleware:
             await self._reject(scope, receive, send)
             return
 
-        received = 0
-        overflow = False
-        started = False
-
-        async def limited_receive() -> Message:
-            nonlocal received, overflow
-            message = await receive()
-            if message["type"] == "http.request":
-                received += len(message.get("body", b""))
-                if received > limit:
-                    overflow = True
-                    raise PayloadTooLargeError(f"request body over {limit} bytes")
-            return message
-
-        async def guarded_send(message: Message) -> None:
-            nonlocal started
-            if overflow and not started:
-                return  # the app's answer to the aborted read is replaced below
-            if message["type"] == "http.response.start":
-                started = True
-            await send(message)
-
+        exchange = _CappedExchange(receive, send, limit)
         try:
-            await self.app(scope, limited_receive, guarded_send)
+            await self.app(scope, exchange.receive, exchange.send)
         except Exception:
-            if not overflow or started:
+            if not exchange.replaceable:
                 raise
-        if overflow and not started:
+        if exchange.replaceable:
             await self._reject(scope, receive, send)
 
     @staticmethod

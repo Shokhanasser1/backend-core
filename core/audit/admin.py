@@ -21,19 +21,16 @@ from shared.pagination import MAX_PAGE_LIMIT, Page, PageResult
 router = APIRouter()
 
 
-@router.get("", dependencies=[Depends(require_permission(perms.RECORD_READ))])
-async def search_audit(
-    bundle: ServiceBundle = Depends(authed_bundle),
+def _audit_query(
     action_prefix: str | None = Query(default=None, max_length=100),
     actor_user_id: UUID | None = Query(default=None),
     object_type: str | None = Query(default=None, max_length=100),
     object_id: str | None = Query(default=None, max_length=200),
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=MAX_PAGE_LIMIT),
-    offset: int = Query(default=0, ge=0),
-) -> PageResult[AuditRecordDTO]:
-    query = AuditQuery(
+) -> AuditQuery:
+    """The search filters, as query parameters."""
+    return AuditQuery(
         action_prefix=action_prefix,
         actor_user_id=actor_user_id,
         object_type=object_type,
@@ -41,6 +38,15 @@ async def search_audit(
         date_from=date_from,
         date_to=date_to,
     )
+
+
+@router.get("", dependencies=[Depends(require_permission(perms.RECORD_READ))])
+async def search_audit(
+    bundle: ServiceBundle = Depends(authed_bundle),
+    query: AuditQuery = Depends(_audit_query),
+    limit: int = Query(default=50, ge=1, le=MAX_PAGE_LIMIT),
+    offset: int = Query(default=0, ge=0),
+) -> PageResult[AuditRecordDTO]:
     return await bundle.audit.search(query, Page(limit=limit, offset=offset))
 
 

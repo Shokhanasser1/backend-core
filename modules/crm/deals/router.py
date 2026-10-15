@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query, status
 from core.auth.deps import require_permission
 from modules.crm.deals import permissions as perms
 from modules.crm.deals.deps import deal_service
-from modules.crm.deals.schemas import CreateDealIn, DealDTO, UpdateDealIn
+from modules.crm.deals.schemas import CreateDealIn, DealChanges, DealDTO, UpdateDealIn
 from modules.crm.deals.service import DealService
 from shared.pagination import MAX_PAGE_LIMIT, Page, PageResult
 
@@ -61,19 +61,7 @@ async def update_deal(
     deal_id: UUID, body: UpdateDealIn, service: DealService = Depends(deal_service)
 ) -> DealDTO:
     # An explicit JSON null clears a link; an absent field leaves it unchanged.
-    sent = body.model_fields_set
-    return await service.update(
-        deal_id,
-        title=body.title,
-        amount=body.amount,
-        currency=body.currency,
-        stage=body.stage,
-        contact_id=body.contact_id,
-        company_id=body.company_id,
-        notes=body.notes,
-        clear_contact="contact_id" in sent and body.contact_id is None,
-        clear_company="company_id" in sent and body.company_id is None,
-    )
+    return await service.update(deal_id, DealChanges.from_request(body))
 
 
 @router.delete(

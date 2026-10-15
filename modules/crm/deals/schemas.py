@@ -47,3 +47,29 @@ class UpdateDealIn(_StrictIn):
     contact_id: UUID | None = None
     company_id: UUID | None = None
     notes: str | None = Field(default=None, max_length=2000)
+
+
+class DealChanges(BaseModel):
+    """A PATCH to apply (service input): ``None`` = leave unchanged; the
+    ``clear_*`` flags remove a link (an explicit JSON ``null`` on the route)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str | None = None
+    amount: int | None = None
+    currency: str | None = None
+    stage: str | None = None
+    contact_id: UUID | None = None
+    company_id: UUID | None = None
+    notes: str | None = None
+    clear_contact: bool = False
+    clear_company: bool = False
+
+    @classmethod
+    def from_request(cls, body: "UpdateDealIn") -> "DealChanges":
+        sent = body.model_fields_set
+        return cls(
+            **body.model_dump(),
+            clear_contact="contact_id" in sent and body.contact_id is None,
+            clear_company="company_id" in sent and body.company_id is None,
+        )

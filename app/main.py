@@ -1,7 +1,7 @@
 """FastAPI composition root: middleware, infra routes, lifespan wiring."""
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 import structlog
@@ -57,12 +57,9 @@ logger = structlog.stdlib.get_logger(__name__)
 _MULTIPART_OVERHEAD = 64 * 1024
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    app_settings = settings or get_settings()
-    configure_logging(app_settings.log_level)
-
-    # Declare the permission catalog before the route validator runs. Each module
-    # registers its codes + grants; admin screens register on the registry.
+def _register_core_rbac() -> None:
+    """Declare the permission catalog before the route validator runs. Each module
+    registers its codes + grants; admin screens register on the registry."""
     register_permissions("tenants", TENANTS_PERMISSIONS)
     register_billing_rbac()  # billing permissions + their grants to system roles
     register_files_rbac()  # files permissions + their grants to system roles
@@ -72,6 +69,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     admin_registry.reset()
     register_admin_screens()  # core screens; feature screens are added by the loader
 
+
+def _lifespan(app_settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Fail fast, before any external connection is made.
@@ -125,11 +124,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await redis.aclose()
             await database.dispose()
 
-    application = FastAPI(
-        title=app_settings.app_name,
-        version=TEMPLATE_VERSION,
-        lifespan=lifespan,
-    )
+    return lifespan
+
+
+def _include_core_routers(application: FastAPI) -> None:
     application.include_router(infra_router)
     application.include_router(auth_router)
     application.include_router(tenants_router)
@@ -138,19 +136,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(files_router)
     application.include_router(admin_router)  # /api/admin/screens (the menu)
 
-    # Business-module features (ENABLED_MODULES): discover, validate requires,
-    # install RBAC + admin screens + mount routers. A feature with an unmet
-    # requires fails here. Runs before mount_admin_screens so feature admin
-    # screens (registered in install()) are mounted too.
-    install_modules(application, app_settings)
 
-    mount_admin_screens(application)  # /api/admin/{slug} for every registered screen
-
-    @application.exception_handler(DomainError)
-    async def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:
-        # Single mapping of the DomainError hierarchy onto HTTP (OV-07).
-        return render_domain_error(exc, request.headers.get("accept-language"))
-
+def _add_middleware(application: FastAPI, app_settings: Settings) -> None:
     # add_middleware is LIFO: RequestID ends up outermost, then CORS, then
     # metrics, then security headers, then the body-size cap closest to the
     # router (its 413 still gets the security headers and a request id).
@@ -172,6 +159,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_headers=["Authorization", "Content-Type"],
         )
     application.add_middleware(RequestIDMiddleware)
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    app_settings = settings or get_settings()
+    configure_logging(app_settings.log_level)
+    _register_core_rbac()
+
+    application = FastAPI(
+        title=app_settings.app_name,
+        version=TEMPLATE_VERSION,
+        lifespan=_lifespan(app_settings),
+    )
+    _include_core_routers(application)
+
+    # Business-module features (ENABLED_MODULES): discover, validate requires,
+    # install RBAC + admin screens + mount routers. A feature with an unmet
+    # requires fails here. Runs before mount_admin_screens so feature admin
+    # screens (registered in install()) are mounted too.
+    install_modules(application, app_settings)
+
+    mount_admin_screens(application)  # /api/admin/{slug} for every registered screen
+
+    @application.exception_handler(DomainError)
+    async def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:
+        # Single mapping of the DomainError hierarchy onto HTTP (OV-07).
+        return render_domain_error(exc, request.headers.get("accept-language"))
+
+    _add_middleware(application, app_settings)
     return application
 
 
