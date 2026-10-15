@@ -15,6 +15,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -45,6 +46,7 @@ PAYME_ERR_INSUFFICIENT_PRIVILEGE = -32504
 PAYME_ERR_INVALID_AMOUNT = -31001
 PAYME_ERR_UNABLE_TO_PERFORM = -31008
 PAYME_ERR_ORDER_NOT_FOUND = -31050
+PAYME_ERR_TXN_NOT_FOUND = -31003
 
 
 # --------------------------------------------------------------------------- seed
@@ -194,7 +196,7 @@ def _processor(sessions: async_sessionmaker[AsyncSession], settings: Settings) -
 # has to match our record.
 def _stripe_raw(event_type: str, obj: dict[str, object], *, event_id: str = "evt_1") -> RawWebhook:
     body = json.dumps({"id": event_id, "type": event_type, "data": {"object": obj}})
-    timestamp = "1700000000"
+    timestamp = str(int(time.time()))
     signed = f"{timestamp}.{body}".encode()
     v1 = hmac.new(STRIPE_WEBHOOK_SECRET.encode(), signed, hashlib.sha256).hexdigest()
     return RawWebhook(
@@ -434,7 +436,7 @@ async def test_cross_tenant_binding_from_our_records(
 
     # A callback for an unknown transaction binds to no tenant -> not_found.
     _, body = await proc.process("payme", _payme_raw("PerformTransaction", {"id": "ghost-txn"}))
-    assert _err_code(body) == PAYME_ERR_ORDER_NOT_FOUND
+    assert _err_code(body) == PAYME_ERR_TXN_NOT_FOUND
 
 
 async def test_amount_mismatch_blocks_transition(

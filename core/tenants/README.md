@@ -11,8 +11,18 @@ owner/admin/member. Реализует `PermissionResolver` для `core/auth` (
 - **`TenantService`** (`service.py`): `create_tenant`, `update_tenant`, `set_status`,
   `get_tenant`, `list_user_tenants`, `list_members`, `get_membership`,
   `has_active_membership`, `invite_member`, `revoke_invitation`, `accept_invitation`,
-  `change_member_role`, `remove_member`, `get_permission_codes` (резолвер прав).
-  Инвариант: у тенанта всегда есть хотя бы один owner.
+  `change_member_role`, `remove_member`, `get_permission_codes` (резолвер прав),
+  `current_tenant_is_active`. Инвариант: у тенанта всегда есть хотя бы один owner.
+- **Приглашения.** Одноразовый токен уходит **только письмом** (шаблон
+  `tenants.invitation`, ru/uz, `notifications.py`; ссылка — `INVITATION_ACCEPT_URL`
+  с `{token}`), строка outbox пишется в той же транзакции, что и приглашение. API
+  токен не возвращает. Принять может только аккаунт с тем email, на который
+  отправлено (иначе 403); приглашение берётся `FOR UPDATE` — параллельный повтор
+  получает 404/409, а не 500.
+- **Приостановленный тенант** (`set_status(..., "suspended")`) не даёт ничего:
+  резолвер прав и проверка членства для обмена на tenant-токен требуют
+  `status = active`, уже выданный tenant-токен перестаёт работать на следующем
+  запросе; витрина (storefront) такого магазина отвечает 404.
 - **`system_role_grants`** (`permissions.py`) — реестр дефолтных грантов системным
   ролям. Другие модули дописывают свои коды через `.extend({ROLE_OWNER: {...}})`;
   `sync.py` идемпотентно синкает результат в `role_permissions` на старте.
@@ -29,6 +39,8 @@ owner/admin/member. Реализует `PermissionResolver` для `core/auth` (
 
 `tenants.tenant.created`, `tenants.tenant.status_changed`, `tenants.member.invited`,
 `tenants.member.joined`, `tenants.member.removed`, `tenants.member.role_changed`.
+Полезная нагрузка — только идентификаторы (email приглашённого в событие не
+попадает).
 
 ## Как расширять
 

@@ -30,6 +30,22 @@ async def test_rate_limiter_blocks_after_limit(redis: Redis) -> None:
     assert allowed == [True, True, True, False]
 
 
+async def test_rate_limiter_window_always_expires(redis: Redis) -> None:
+    # A counter left without a TTL (a crash between INCR and EXPIRE in the old
+    # two-step code) must not become a permanent block: every hit guarantees one.
+    await redis.set("rl:login:5.6.7.8", 99)
+    limiter = RateLimiter(redis)
+    assert await limiter.hit("login", "5.6.7.8", limit=3, window_seconds=60) is False
+    assert 0 < await redis.ttl("rl:login:5.6.7.8") <= 60
+
+
+async def test_login_throttle_failures_always_expire(redis: Redis) -> None:
+    await redis.set("auth:fail:user-9", 1)  # leftover without TTL
+    throttle = LoginThrottle(redis, max_failures=5, lockout_seconds=60)
+    await throttle.record_failure("user-9")
+    assert 0 < await redis.ttl("auth:fail:user-9") <= 60
+
+
 async def test_login_throttle_locks_and_clears(redis: Redis) -> None:
     throttle = LoginThrottle(redis, max_failures=3, lockout_seconds=60)
     account = "user-1"

@@ -4,10 +4,14 @@ Exercises the whole vertical: register -> login -> create tenant -> select
 tenant -> permission-protected access, plus the mandatory negative tests.
 """
 
+import asyncio
 from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 pytestmark = pytest.mark.integration
 
@@ -34,6 +38,32 @@ def _tenant_token(client: TestClient, user_token: str, tenant_id: str) -> str:
     resp = client.post(f"/api/auth/tenants/{tenant_id}/token", headers=_headers(user_token))
     assert resp.status_code == 200, resp.text
     return cast("str", resp.json()["access_token"])
+
+
+def invitation_token(client: TestClient, email: str) -> str:
+    """The invitation token travels only inside the emailed accept link: read it
+    back from the newest queued invitation email to that address."""
+
+    async def fetch() -> str:
+        app = cast("FastAPI", client.app)
+        engine = create_async_engine(app.state.settings.database_maintenance_url)
+        try:
+            async with engine.connect() as conn:
+                params = (
+                    await conn.execute(
+                        text(
+                            "SELECT params FROM notification_outbox "
+                            "WHERE template_key = 'tenants.invitation' AND recipient = :email "
+                            "ORDER BY created_at DESC LIMIT 1"
+                        ),
+                        {"email": email.strip().lower()},
+                    )
+                ).scalar_one()
+        finally:
+            await engine.dispose()
+        return str(params["accept_url"]).split("token=", 1)[1]
+
+    return asyncio.run(fetch())
 
 
 def _owner_with_tenant(client: TestClient, email: str) -> tuple[str, str, str]:
@@ -109,14 +139,13 @@ def test_member_without_permission_gets_403(client: TestClient) -> None:
         json={"email": "member@example.uz", "role": "member"},
     )
     assert invited.status_code == 201, invited.text
-    invitation_token = invited.json()["invitation_token"]
 
     _register(client, "member@example.uz")
     member_user = _login(client, "member@example.uz")["access_token"]
     accepted = client.post(
         "/api/tenants/invitations/accept",
         headers=_headers(member_user),
-        json={"invitation_token": invitation_token},
+        json={"invitation_token": invitation_token(client, "member@example.uz")},
     )
     assert accepted.status_code == 200, accepted.text
     member_tenant = _tenant_token(client, member_user, tenant_id)

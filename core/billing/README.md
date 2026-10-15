@@ -28,7 +28,38 @@ Click и Stripe). Payme/Click работают по UZS; Stripe — для за�
   system→tenant → идемпотентность `(provider, dedup_key)` + FOR UPDATE-replay →
   сверка суммы → ответ в диалекте провайдера.
 - Роутеры: `/api/billing` (authed, `router` в `api.py`) и вебхуки (`router.py`, public).
-- Джоба `expire_stale_checkouts` (`jobs.py`) — cron воркера.
+- Джобы (`jobs.py`, cron воркера): `expire_stale_checkouts` (брошенный checkout →
+  `expired`) и `expire_ended_subscriptions` (конец периода).
+
+**Жизненный цикл подписки.** У тенанта не больше одной живой подписки
+(`trialing|active|past_due`) и не больше одного платного checkout (`pending`) —
+два частичных уникальных индекса. Апгрейд с free: платная `pending` живёт рядом с
+free; успех платежа в одной транзакции закрывает free (`canceled`,
+`billing.subscription.replaced`) и активирует платную. Повторный `start_subscription`
+того же плана и провайдера возвращает тот же checkout; другой план/провайдер — 409,
+пока открытый не оплачен или не истёк. Оплата того же плана заранее продлевает
+период от текущего конца, а не с «сейчас». Неуспешный/отменённый/брошенный
+checkout снимает `pending`, free остаётся. Конец периода: бесплатный план
+продлевается, платный (автосписаний в v1 нет) закрывается (`expired`, либо
+`canceled` при `cancel_at_period_end`, событие `billing.subscription.ended`) с
+откатом на free-план (`BILLING_AUTO_SUBSCRIBE`).
+
+**Гонки статусов.** Вебхук и expiry-джоба берут строку платежа `FOR UPDATE` до
+чтения статуса: параллельный переход дожидается и перечитывается, а не
+затирается. `expired` — наш маркер брошенного checkout, не вердикт провайдера:
+поздний успех (`expired → succeeded`) принимается — деньги уже списаны.
+
+**Вебхуки.** Сумма, которую не удалось разобрать, нормализуется в 0 и не
+сверяется (ответ «неверная сумма», а не 500); действие без суммы (`None`) —
+нечего сверять. Payme отвечает реальными `state`/`create_time`/`perform_time`/
+`cancel_time`/`reason` из записанных переходов (повтор и `CheckTransaction` видят
+те же значения); неизвестная транзакция → -31003. Click `Complete` с `error < 0` —
+отмена (ответ -9), не подтверждение. Stripe: подпись с окном 300 с, создание
+сессии — один вызов ~10 с без ретраев внутри запроса (держит DB-транзакцию;
+повтор — клиентом с тем же ключом идемпотентности). Отклонённые по подписи
+запросы журналируются с обрезанным телом (4 КиБ). `create_payment`: ключ
+идемпотентности с другими параметрами → 409; гонка одинаковых ключей —
+savepoint + чтение победителя; `return_url` — только абсолютный http(s) без `;`.
 
 ## Права (владеет)
 
@@ -37,7 +68,7 @@ Click и Stripe). Payme/Click работают по UZS; Stripe — для за�
 ## События
 
 - **Публикует:** `billing.payment.created|succeeded|failed|canceled|expired`,
-  `billing.subscription.activated|canceled`.
+  `billing.subscription.activated|canceled|replaced|ended`.
 - **Слушает:** `tenants.tenant.created` → авто-подписка (`subscribers.py`); чеки
   billing→notifications на `payment.succeeded`/`subscription.activated` (`receipts.py`).
 

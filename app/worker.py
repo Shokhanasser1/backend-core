@@ -24,7 +24,7 @@ from app.features import install_module_workers
 from app.logging_setup import configure_logging
 from app.observability import init_sentry
 from core.audit.retention import purge_expired_audit
-from core.billing.jobs import expire_stale_checkouts
+from core.billing.jobs import expire_ended_subscriptions, expire_stale_checkouts
 from core.notifications.channels import build_notification_channels
 from core.notifications.dispatcher import dispatch_due_notifications
 from core.notifications.registry import template_registry
@@ -118,6 +118,14 @@ async def dispatch_event(ctx: dict[str, Any], handler_id: str, wire: dict[str, A
 async def expire_checkouts(ctx: dict[str, Any]) -> int:
     """Scheduled sweep: abandoned checkouts past TTL -> expired (schema §2.3)."""
     return await expire_stale_checkouts(ctx["maintenance_sessions"], ctx["bus"], ctx["settings"])
+
+
+async def close_ended_subscriptions(ctx: dict[str, Any]) -> int:
+    """Scheduled sweep: ended subscription periods roll forward (free) or close
+    with a fallback to the free plan (paid; no recurring charge in v1)."""
+    return await expire_ended_subscriptions(
+        ctx["maintenance_sessions"], ctx["bus"], ctx["settings"]
+    )
 
 
 async def dispatch_notifications(ctx: dict[str, Any]) -> int:
@@ -214,14 +222,17 @@ class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         dispatch_event,
         expire_checkouts,
+        close_ended_subscriptions,
         dispatch_notifications,
         purge_retention,
     ]
-    # Checkout-expiry sweep every 5 minutes (interfaces §3.3); notification outbox
-    # drained every 15 seconds so queued messages leave promptly (schema §2.4);
-    # retention sweep once daily at 03:00 (schema §2.5, OV-27).
+    # Checkout-expiry sweep every 5 minutes (interfaces §3.3); subscription period
+    # ends hourly; notification outbox drained every 15 seconds so queued messages
+    # leave promptly (schema §2.4); retention sweep once daily at 03:00 (schema
+    # §2.5, OV-27).
     cron_jobs: ClassVar[list[Any]] = [
         cron(expire_checkouts, minute=set(range(0, 60, 5))),
+        cron(close_ended_subscriptions, minute={7}),
         cron(dispatch_notifications, second={0, 15, 30, 45}),
         cron(purge_retention, hour={3}, minute={0}),
     ]

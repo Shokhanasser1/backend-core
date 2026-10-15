@@ -17,6 +17,7 @@ from tests.test_auth_flows import (
     _owner_with_tenant,
     _register,
     _tenant_token,
+    invitation_token,
 )
 
 pytestmark = pytest.mark.integration
@@ -185,7 +186,7 @@ def _member_of(client: TestClient, owner_tenant: str, tenant_id: str, email: str
     client.post(
         "/api/tenants/invitations/accept",
         headers=_headers(user_token),
-        json={"invitation_token": invited.json()["invitation_token"]},
+        json={"invitation_token": invitation_token(client, email)},
     )
     return _tenant_token(client, user_token, tenant_id)
 

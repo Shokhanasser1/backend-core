@@ -12,6 +12,7 @@ from core.auth.deps import (
     public_endpoint,
 )
 from core.auth.schemas import (
+    AccessToken,
     ChangePasswordIn,
     LoginIn,
     LoginResult,
@@ -37,7 +38,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
     dependencies=[Depends(public_endpoint("registration is open to anonymous users"))],
 )
 async def register(body: RegisterIn, bundle: ServiceBundle = Depends(public_bundle)) -> UserDTO:
-    return await bundle.auth.register(body.email, body.password, body.locale)
+    return await bundle.auth.register(body.email, body.password, body.locale, ip=bundle.request.ip)
 
 
 @router.post(
@@ -157,8 +158,9 @@ async def disable_two_factor(
 )
 async def select_tenant(
     tenant_id: UUID, bundle: ServiceBundle = Depends(authed_bundle)
-) -> TokenPair:
-    """Issue a tenant-scoped access token after verifying membership (OV-03)."""
+) -> AccessToken:
+    """Issue a tenant-scoped access token after verifying an active membership
+    in an active (not suspended) tenant (OV-03)."""
     if not await bundle.tenants.has_active_membership(tenant_id, bundle.user_id):
-        raise PermissionDeniedError("not a member of this tenant")
+        raise PermissionDeniedError("not an active member of an active tenant")
     return await bundle.auth.issue_tenant_token(tenant_id)

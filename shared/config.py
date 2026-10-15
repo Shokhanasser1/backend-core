@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEV_JWT_SECRET = "dev-insecure-change-me"  # noqa: S105 - dev default, refused in prod
 _DEV_PASSWORD_RESET_URL = "http://localhost:3000/reset-password#token={token}"  # noqa: S105
+_DEV_INVITATION_ACCEPT_URL = "http://localhost:3000/accept-invitation#token={token}"
 _MIN_JWT_SECRET_BYTES = 32  # HS256 key >= hash output size (RFC 7518 §3.2)
 
 
@@ -50,6 +51,9 @@ class Settings(BaseSettings):
     enabled_modules: str = ""
 
     ready_check_timeout_seconds: float = 2.0
+    # Request body cap for every route, enforced at the ASGI edge before the app
+    # buffers anything (413). File uploads get files_max_upload_bytes instead.
+    max_request_body_bytes: int = 1024 * 1024
 
     # --- auth defaults (OV-11): overridable per project via env ---
     jwt_secret: str = _DEV_JWT_SECRET  # dev default; prod must supply its own (see below)
@@ -64,6 +68,12 @@ class Settings(BaseSettings):
     # one-time token in the emailed link. Keep the token in the #fragment: browsers
     # never send it to servers, so it stays out of access logs and Referer headers.
     password_reset_url: str = _DEV_PASSWORD_RESET_URL
+    # Frontend page that accepts a tenant invitation; "{token}" is replaced with the
+    # one-time invitation token in the emailed link (kept in the #fragment too).
+    invitation_accept_url: str = _DEV_INVITATION_ACCEPT_URL
+    # Sign-ups per client IP per hour (anti-abuse; also slows email enumeration
+    # through "already registered").
+    register_ip_limit_per_hour: int = 20
     # Fernet key(s) for encrypting tenant/2FA secrets (OV-19). Comma-separated
     # for MultiFernet rotation; empty in dev = a deterministic dev key is used.
     secret_encryption_keys: str = ""
@@ -156,11 +166,11 @@ class Settings(BaseSettings):
     # raises), so a client enabling crm.deals must set this.
     crm_deal_stages: str = ""
 
-    @field_validator("password_reset_url")
+    @field_validator("password_reset_url", "invitation_accept_url")
     @classmethod
-    def _reset_url_carries_token(cls, value: str) -> str:
+    def _link_carries_token(cls, value: str) -> str:
         if "{token}" not in value:
-            raise ValueError("PASSWORD_RESET_URL must contain the {token} placeholder")
+            raise ValueError("emailed one-time links must contain the {token} placeholder")
         return value
 
     @model_validator(mode="after")
@@ -178,6 +188,8 @@ class Settings(BaseSettings):
             problems.append("SECRET_ENCRYPTION_KEYS must hold at least one Fernet key")
         if self.password_reset_url == _DEV_PASSWORD_RESET_URL:
             problems.append("PASSWORD_RESET_URL must point at the production frontend")
+        if self.invitation_accept_url == _DEV_INVITATION_ACCEPT_URL:
+            problems.append("INVITATION_ACCEPT_URL must point at the production frontend")
         if problems:
             raise ValueError("insecure production config: " + "; ".join(problems))
         return self

@@ -15,9 +15,15 @@ import core.subscribers  # noqa: F401  (register core event subscribers on the b
 from app.admin_screens import mount_admin_screens
 from app.config import Settings, get_settings
 from app.db import Database
+from app.errors import render_domain_error
 from app.features import install_modules
 from app.logging_setup import configure_logging
-from app.middleware import MetricsMiddleware, RequestIDMiddleware, SecurityHeadersMiddleware
+from app.middleware import (
+    BodySizeLimitMiddleware,
+    MetricsMiddleware,
+    RequestIDMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.observability import init_sentry
 from app.redis_client import create_redis
 from app.routes import router as infra_router
@@ -41,13 +47,14 @@ from core.tenants.router import router as tenants_router
 from core.tenants.sync import sync_system_roles
 from shared import TEMPLATE_VERSION
 from shared.encryption import SecretCipher
-from shared.error_catalog import ERROR_CATALOG
 from shared.errors import DomainError
 from shared.events import bus
-from shared.i18n import negotiate_locale, parse_accept_language
 from shared.money import currency_registry
 
 logger = structlog.stdlib.get_logger(__name__)
+
+# Multipart framing around an uploaded file (boundaries, part headers, filename).
+_MULTIPART_OVERHEAD = 64 * 1024
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -142,23 +149,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(DomainError)
     async def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:
         # Single mapping of the DomainError hierarchy onto HTTP (OV-07).
-        # message_key stays machine-readable; message is rendered in the request
-        # locale (Accept-Language -> 'ru') via the i18n error catalog (Phase 3).
-        locale = negotiate_locale(parse_accept_language(request.headers.get("accept-language")))
-        return JSONResponse(
-            status_code=exc.http_status,
-            content={
-                "error": {
-                    "code": exc.code,
-                    "message_key": exc.message_key,
-                    "message": ERROR_CATALOG.get(exc.message_key, locale),
-                    "detail": exc.detail,
-                }
-            },
-        )
+        return render_domain_error(exc, request.headers.get("accept-language"))
 
-    # add_middleware is LIFO: RequestID ends up outermost, then CORS,
-    # then metrics, then security headers closest to the router.
+    # add_middleware is LIFO: RequestID ends up outermost, then CORS, then
+    # metrics, then security headers, then the body-size cap closest to the
+    # router (its 413 still gets the security headers and a request id).
+    # Uploads get their own cap: the file limit plus multipart framing.
+    application.add_middleware(
+        BodySizeLimitMiddleware,
+        default_limit=app_settings.max_request_body_bytes,
+        path_limits={"/api/files": app_settings.files_max_upload_bytes + _MULTIPART_OVERHEAD},
+    )
     application.add_middleware(SecurityHeadersMiddleware)
     application.add_middleware(MetricsMiddleware)
     if app_settings.cors_origin_list:

@@ -105,8 +105,24 @@ class Service:
         """Queue an event for the current transaction; returns event_id so the
         caller can link a direct audit record to it (interfaces doc §3.5).
         Publication happens post-commit."""
+        envelope = self._envelope(name, payload, version)
+        if not self._pending_events:
+            self._uow.on_commit(self._publish_pending)
+        self._pending_events.append(envelope)
+        return envelope.event_id
+
+    async def emit_now(self, name: str, payload: Mapping[str, Any], *, version: int = 1) -> UUID:
+        """Publish immediately, independent of the transaction. ONLY for a fact
+        that holds whether or not this transaction commits — a refused request
+        that ends in a rollback (e.g. a failed login), where ``emit`` would be
+        discarded with it. Never for a state change."""
+        envelope = self._envelope(name, payload, version)
+        await self._bus.publish(envelope)
+        return envelope.event_id
+
+    def _envelope(self, name: str, payload: Mapping[str, Any], version: int) -> EventEnvelope:
         validate_event_name(name)
-        envelope = EventEnvelope(
+        return EventEnvelope(
             event_id=new_uuid7(),
             name=name,
             version=version,
@@ -115,10 +131,6 @@ class Service:
             actor=self._ctx.actor,
             payload=dict(payload),
         )
-        if not self._pending_events:
-            self._uow.on_commit(self._publish_pending)
-        self._pending_events.append(envelope)
-        return envelope.event_id
 
     async def _publish_pending(self) -> None:
         pending, self._pending_events = self._pending_events, []

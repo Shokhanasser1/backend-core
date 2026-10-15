@@ -4,6 +4,12 @@ Owned by billing, not the adapter. Transitions go forward only:
 created -> pending -> succeeded | failed | canceled | expired
 (created may also go straight to a terminal state, e.g. cancel of an unopened
 checkout). Refunds are out of v1 scope (OV-22): succeeded is terminal.
+
+``expired`` is OUR abandonment marker (checkout TTL), not the provider's verdict:
+a provider may still confirm the payment after it (a Stripe Checkout Session
+outlives our TTL; a Payme/Click transaction opened before it may be performed
+after it). Money has moved by then, so ``expired -> succeeded`` is allowed — a late
+success is honored, never dropped.
 """
 
 from shared.errors import InvariantViolationError
@@ -16,7 +22,7 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
     "succeeded": frozenset(),
     "failed": frozenset(),
     "canceled": frozenset(),
-    "expired": frozenset(),
+    "expired": frozenset({"succeeded"}),  # late provider success (see module doc)
 }
 
 

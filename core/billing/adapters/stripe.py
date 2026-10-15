@@ -15,11 +15,15 @@ equal the amount we recorded — the webhook processor reconciles it.
 
 Webhook authenticity is the Stripe ``Stripe-Signature`` header: an HMAC-SHA256
 over ``"{timestamp}.{raw_body}"`` keyed by the endpoint signing secret,
-compared in constant time. The timestamp is part of the signed payload (so it
-cannot be tampered), and effectively-once delivery is guaranteed by the webhook
-ledger keyed on Stripe's unique event id — so, like the sibling adapters, this
-one does not add a wall-clock replay window (which would make a pure function
-time-dependent); replay defence lives in ``WebhookProcessor``.
+compared in constant time. The signed timestamp must also be within
+``tolerance_seconds`` (300 s, Stripe's own default) of our clock: a captured
+request cannot be replayed later. Duplicates inside the window are absorbed by
+the webhook ledger keyed on Stripe's unique event id (``WebhookProcessor``).
+
+``create_checkout`` runs inside the caller's DB transaction (the payment row is
+written in the same request), so it is ONE bounded call — no in-request retries:
+a failure surfaces as ``PaymentProviderError`` and the client retries with the
+same idempotency key.
 
 Event mapping onto the shared port's action model:
 - ``checkout.session.completed`` (``payment_status == "paid"``) -> ``confirm``
@@ -35,7 +39,8 @@ Event mapping onto the shared port's action model:
 import hashlib
 import hmac
 import json
-from collections.abc import Mapping
+import time
+from collections.abc import Callable
 from typing import Any, ClassVar
 from urllib.parse import urlencode
 
@@ -58,13 +63,16 @@ from shared.resilience import CircuitBreaker, RetryPolicy, call_resilient
 EVENT_COMPLETED = "checkout.session.completed"
 EVENT_EXPIRED = "checkout.session.expired"
 
-_TIMEOUT = 20.0
+# One bounded call: it holds the request's DB transaction while it waits.
+_TIMEOUT = 10.0
+SIGNATURE_TOLERANCE_SECONDS = 300
 
 
 class _StripeTransientError(PaymentProviderError):
-    """5xx / 429 / network from the Stripe API -> retry. A 4xx (bad request,
-    auth) is raised as the base PaymentProviderError instead, which is NOT in the
-    retry ``transient`` set below, so it fails fast."""
+    """5xx / 429 / network from the Stripe API: transient — it trips the circuit
+    breaker (no in-request retry, see module doc). A 4xx (bad request, auth) is
+    raised as the base PaymentProviderError instead, which is NOT in the
+    ``transient`` set below."""
 
 
 # Transient set for create_checkout: our transient marker plus low-level network
@@ -110,6 +118,8 @@ class StripeProvider:
         success_url: str,
         cancel_url: str,
         transport: httpx.AsyncBaseTransport | None = None,
+        tolerance_seconds: int = SIGNATURE_TOLERANCE_SECONDS,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         if not secret_key or not webhook_secret:
             raise PaymentProviderError("Stripe adapter requires secret_key and webhook_secret")
@@ -118,6 +128,8 @@ class StripeProvider:
         self._success_url = success_url
         self._cancel_url = cancel_url
         self._transport = transport  # tests inject httpx.MockTransport
+        self._tolerance_seconds = tolerance_seconds
+        self._clock = clock  # tests pin "now" for the replay window
         self._breaker = CircuitBreaker(name="stripe", failure_threshold=5, recovery_time=30.0)
 
     @classmethod
@@ -150,7 +162,7 @@ class StripeProvider:
         session = await call_resilient(
             _op,
             timeout=_TIMEOUT,
-            retry=RetryPolicy(attempts=3),
+            retry=RetryPolicy(attempts=1),
             breaker=self._breaker,
             transient=_CHECKOUT_TRANSIENT,
             error_cls=PaymentProviderError,
@@ -162,7 +174,7 @@ class StripeProvider:
             payment_id=payment.id,
             provider=self.code,
             checkout_url=str(url),
-            expires_at=None,  # our own TTL/expiry job governs abandonment (task 13)
+            expires_at=None,  # our own TTL/expiry job governs abandonment
         )
 
     async def _post_checkout(self, form: dict[str, str]) -> dict[str, Any]:
@@ -231,7 +243,7 @@ class StripeProvider:
 
     def _normalize(
         self, event: dict[str, Any], event_type: str, obj: dict[str, Any]
-    ) -> tuple[CallbackAction, str, str | None, Money]:
+    ) -> tuple[CallbackAction, str, str | None, Money | None]:
         """Map a Stripe event onto (action, payment_reference, provider_txn_id,
         amount). The dedup ledger keys on the event id (Stripe redelivers keep
         it), while the payment is located by client_reference_id (our payment id).
@@ -243,33 +255,27 @@ class StripeProvider:
             amount = minor_units_from_stripe(obj.get("amount_total"), obj.get("currency"))
             return "confirm", reference, event_id, amount
         if event_type == EVENT_EXPIRED:
-            # Amount left at 0 -> reconciliation skipped: a cancel must not be
-            # blocked by an amount check (mirrors the sibling adapters).
-            return "cancel", reference, event_id, Money(0, _safe_currency(obj))
+            # No amount: a cancel must not be blocked by an amount check.
+            return "cancel", reference, event_id, None
         # Not one we act on: acknowledge without touching state. Empty reference +
         # no txn id -> the processor's read-only path finds no payment and answers
         # 200 (Stripe ignores the body).
-        return "status", "", None, Money(0, _safe_currency(obj))
+        return "status", "", None, None
 
     def _signature_ok(self, raw: RawWebhook) -> bool:
-        header = _header(raw.headers, "stripe-signature")
+        header = raw.header("stripe-signature")
         if not header:
             return False
         timestamp, signatures = _parse_signature_header(header)
-        if timestamp is None or not signatures:
+        if timestamp is None or not signatures or not timestamp.isdigit():
             return False
+        if abs(self._clock() - int(timestamp)) > self._tolerance_seconds:
+            return False  # outside the replay window
         signed_payload = f"{timestamp}.{raw.body}".encode()
         expected = hmac.new(
             self._webhook_secret.encode(), signed_payload, hashlib.sha256
         ).hexdigest()
         return any(hmac.compare_digest(expected, candidate) for candidate in signatures)
-
-
-def _safe_currency(obj: dict[str, Any]) -> str:
-    """Currency for a zero-amount Money on non-confirm actions; falls back to USD
-    when the event object carries none (the amount is 0, so it is never checked)."""
-    code = str(obj.get("currency") or "").upper()
-    return code if len(code) == 3 and code.isalpha() else "USD"
 
 
 def _parse_signature_header(header: str) -> tuple[str | None, list[str]]:
@@ -284,12 +290,3 @@ def _parse_signature_header(header: str) -> tuple[str | None, list[str]]:
         elif key == "v1":
             signatures.append(value)
     return timestamp, signatures
-
-
-def _header(headers: Mapping[str, str], name: str) -> str | None:
-    """Case-insensitive header lookup over a plain mapping."""
-    lowered = name.lower()
-    for key, value in headers.items():
-        if str(key).lower() == lowered:
-            return str(value)
-    return None

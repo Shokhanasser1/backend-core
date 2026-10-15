@@ -23,6 +23,7 @@ from core.auth.rate_limit import (
 )
 from core.auth.repository import UserRepository
 from core.auth.schemas import (
+    AccessToken,
     LoginResult,
     RecoveryCodes,
     TokenPair,
@@ -91,7 +92,17 @@ class AuthService(Service):
         self._resets = EphemeralTokenStore(redis, RESET_NS)
 
     # ------------------------------------------------------------- registration
-    async def register(self, email: str, password: str, locale: str = "ru") -> UserDTO:
+    async def register(
+        self, email: str, password: str, locale: str = "ru", *, ip: str | None = None
+    ) -> UserDTO:
+        # Per-IP cap: anti-abuse, and it bounds probing emails via the 409 below.
+        if not await self._limiter.hit(
+            "register_ip",
+            ip or "unknown",
+            limit=self._settings.register_ip_limit_per_hour,
+            window_seconds=3600,
+        ):
+            raise RateLimitedError("too many registrations")
         normalized = email.strip().lower()
         if await self._users.get_by_email(normalized) is not None:
             raise ConflictError("email already registered")
@@ -103,10 +114,8 @@ class AuthService(Service):
             status="active",
         )
         await self._users.add(user)
-        self.emit(
-            "auth.user.registered",
-            {"user_id": str(user.id), "email": user.email, "locale": user.locale},
-        )
+        # Events (and the audit trail fed from them) carry ids, never the email.
+        self.emit("auth.user.registered", {"user_id": str(user.id), "locale": user.locale})
         return _user_dto(user, two_factor_enabled=False)
 
     # --------------------------------------------------------------------- login
@@ -125,9 +134,15 @@ class AuthService(Service):
         password_ok = passwords.verify_password(user.password_hash if user else None, password)
         if user is None or not password_ok or user.status != "active":
             await self._throttle.record_failure(account_key)
-            self.emit(
+            # The request ends in a rollback, so a transactional emit would be
+            # discarded: publish now. No email (PII) — the user id when known.
+            await self.emit_now(
                 "auth.user.login_failed",
-                {"email": normalized, "ip": ip, "reason": "invalid_credentials"},
+                {
+                    "user_id": str(user.id) if user else None,
+                    "ip": ip,
+                    "reason": "invalid_credentials",
+                },
             )
             raise AuthenticationError("invalid credentials")
 
@@ -155,18 +170,18 @@ class AuthService(Service):
         user_id = UUID(user_id_raw)
         if not await self._limiter.hit("2fa", str(user_id), limit=5, window_seconds=300):
             raise RateLimitedError("too many 2FA attempts")
+        user = await self._users.get(user_id)
+        if user is None or user.status != "active":
+            raise AuthenticationError("invalid or expired challenge")  # blocked meanwhile
         if not await self._verify_totp_or_recovery(user_id, totp_code):
             raise AuthenticationError("invalid 2FA code")
-        user = await self._users.get_or_raise(user_id)
         return await self._issue_tokens(user, ip=None, user_agent=None)
 
     # -------------------------------------------------------------------- tokens
     async def _issue_tokens(
-        self, user: User, *, ip: str | None, user_agent: str | None, tenant_id: UUID | None = None
+        self, user: User, *, ip: str | None, user_agent: str | None
     ) -> TokenPair:
-        access, _jti = encode_access_token(
-            user_id=user.id, tenant_id=tenant_id, settings=self._settings
-        )
+        access, _jti = encode_access_token(user_id=user.id, tenant_id=None, settings=self._settings)
         raw_refresh = new_opaque_token()
         self._session.add(
             RefreshToken(
@@ -212,6 +227,12 @@ class AuthService(Service):
             raise AuthenticationError("refresh token reuse detected")
         if row.expires_at <= datetime.now(UTC):
             raise AuthenticationError("refresh token expired")
+        user = await self._users.get(row.user_id)
+        if user is None or user.status != "active":
+            # A blocked account loses its sessions for good, not just this call.
+            await self._revoke_family(row.family_id, reason="user_blocked")
+            await self._session.commit()
+            raise AuthenticationError("invalid refresh token")
 
         # Atomic CAS rotation: only one caller wins.
         result = cast(
@@ -229,7 +250,6 @@ class AuthService(Service):
         if result.rowcount == 0:
             raise AuthenticationError("refresh token already rotated")
 
-        user = await self._users.get_or_raise(row.user_id)
         access, _jti = encode_access_token(user_id=user.id, tenant_id=None, settings=self._settings)
         raw_refresh = new_opaque_token()
         self._session.add(
@@ -249,11 +269,18 @@ class AuthService(Service):
             expires_in=self._settings.access_token_ttl_seconds,
         )
 
-    async def issue_tenant_token(self, tenant_id: UUID) -> TokenPair:
+    async def issue_tenant_token(self, tenant_id: UUID) -> AccessToken:
         """Exchange a user-scope session for a tenant-scoped access token (OV-03).
-        Membership is verified by the caller (deps) before this is called."""
+        Membership (and the tenant being active) is verified by the caller before
+        this is called. Access token only: the long-lived session stays the one
+        refresh family from login — a stolen access token cannot mint another."""
         user = await self._users.get_or_raise(self._actor_user_id())
-        return await self._issue_tokens(user, ip=None, user_agent=None, tenant_id=tenant_id)
+        if user.status != "active":
+            raise AuthenticationError("account is not active")
+        access, _jti = encode_access_token(
+            user_id=user.id, tenant_id=tenant_id, settings=self._settings
+        )
+        return AccessToken(access_token=access, expires_in=self._settings.access_token_ttl_seconds)
 
     async def logout(self, refresh_token: str) -> None:
         token_hash = hash_token(refresh_token)
@@ -374,22 +401,21 @@ class AuthService(Service):
         if totp.verify_totp(secret, code):
             # Reject a replayed code within its validity window.
             return await self._replay.check_and_mark(str(user_id), code)
-        # Fall back to a one-time recovery code.
-        code_hash = totp.hash_recovery_code(code)
-        recovery = (
+        # Fall back to a one-time recovery code: spent by an atomic compare-and-set,
+        # so two concurrent logins with the same code cannot both succeed.
+        spent = cast(
+            "CursorResult[Any]",
             await self._session.execute(
-                select(UserRecoveryCode).where(
+                update(UserRecoveryCode)
+                .where(
                     UserRecoveryCode.user_id == user_id,
-                    UserRecoveryCode.code_hash == code_hash,
+                    UserRecoveryCode.code_hash == totp.hash_recovery_code(code),
                     UserRecoveryCode.used_at.is_(None),
                 )
-            )
-        ).scalar_one_or_none()
-        if recovery is None:
-            return False
-        recovery.used_at = datetime.now(UTC)
-        await self._session.flush()
-        return True
+                .values(used_at=datetime.now(UTC))
+            ),
+        )
+        return spent.rowcount == 1
 
     # -------------------------------------------------------------------- reads
     async def get_user(self, user_id: UUID) -> UserDTO:

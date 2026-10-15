@@ -39,8 +39,9 @@ def _content_disposition(filename: str | None) -> str:
 async def upload_file(
     upload: UploadFile = File(...), service: FileService = Depends(file_service)
 ) -> FileDTO:
-    # Read at most cap+1 bytes: an oversized upload is rejected without buffering
-    # the whole payload; the service enforces the exact limit and validates content.
+    # Starlette has already spooled the multipart body by now; what bounds it is
+    # the edge cap (BodySizeLimitMiddleware: upload limit + multipart framing).
+    # Reading cap+1 lets the service enforce the exact limit and validate content.
     data = await upload.read(service.max_upload_bytes + 1)
     return await service.upload(
         filename=upload.filename, declared_content_type=upload.content_type, data=data

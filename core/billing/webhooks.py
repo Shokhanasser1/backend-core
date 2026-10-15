@@ -45,7 +45,7 @@ from core.billing.ports import (
     ProviderCallback,
     RawWebhook,
 )
-from core.billing.service import PaymentService, _payment_dto
+from core.billing.service import PaymentService, payment_dto
 from shared.config import Settings
 from shared.context import Actor, TenantContext
 from shared.db import apply_tenant_context
@@ -66,6 +66,9 @@ _STATE_CHANGING_ACTIONS = frozenset({"create", "confirm", "cancel"})
 # Header values redacted before journalling (schema §2.6): channel secrets never
 # reach the DB. Authorization keeps only its scheme name.
 _REDACT_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization", "x-api-key"})
+# Unauthenticated traffic is journalled for forensics only: a bounded prefix of
+# the body is enough, and an attacker cannot grow the table by request size.
+_REJECTED_BODY_LIMIT = 4096
 
 
 class _PaymentSystemRepo(SystemRepository[Payment]):
@@ -170,7 +173,7 @@ class WebhookProcessor:
         payment = await self._find_payment(session, callback)
         if payment is None:
             return CallbackOutcome(status="not_found", callback=callback)
-        dto = _payment_dto(payment)
+        dto = payment_dto(payment)
         if not self._amount_ok(callback, payment):
             return CallbackOutcome(status="amount_mismatch", payment=dto, callback=callback)
         if callback.action == "check" and payment.status not in ("created", "pending"):
@@ -213,7 +216,7 @@ class WebhookProcessor:
         webhook: PaymentWebhook,
     ) -> CallbackOutcome:
         session = uow.session
-        payment = await self._find_payment(session, callback)
+        payment = await self._find_payment(session, callback, for_update=True)
         if payment is None:
             webhook.status = "rejected"
             webhook.error = "payment not found"
@@ -243,7 +246,7 @@ class WebhookProcessor:
                 extra={"payment_id": str(payment.id), "provider": provider_code},
             )
             return CallbackOutcome(
-                status="amount_mismatch", payment=_payment_dto(payment), callback=callback
+                status="amount_mismatch", payment=payment_dto(payment), callback=callback
             )
 
         payments = PaymentService(
@@ -256,12 +259,12 @@ class WebhookProcessor:
             webhook.error = str(exc)
             webhook.processed_at = _now()
             return CallbackOutcome(
-                status="invalid_state", payment=_payment_dto(payment), callback=callback
+                status="invalid_state", payment=payment_dto(payment), callback=callback
             )
 
         webhook.status = "processed"
         webhook.processed_at = _now()
-        return CallbackOutcome(status="ok", payment=_payment_dto(payment), callback=callback)
+        return CallbackOutcome(status="ok", payment=payment_dto(payment), callback=callback)
 
     async def _apply_action(
         self, payments: PaymentService, payment: Payment, callback: ProviderCallback
@@ -274,7 +277,7 @@ class WebhookProcessor:
         elif callback.action == "confirm":
             await payments.mark_succeeded(payment)
         elif callback.action == "cancel":
-            await payments.mark_canceled_by_provider(payment)
+            await payments.mark_canceled_by_provider(payment, reason=callback.reason)
         else:  # pragma: no cover - guarded by _STATE_CHANGING_ACTIONS
             raise InvariantViolationError(f"unsupported action: {callback.action}")
 
@@ -298,7 +301,7 @@ class WebhookProcessor:
             if webhook.payment_id is not None
             else None
         )
-        dto = _payment_dto(payment) if payment is not None else None
+        dto = payment_dto(payment) if payment is not None else None
         if webhook.status == "rejected":
             rejected: OutcomeStatus = (
                 "amount_mismatch" if (webhook.error or "").startswith("amount") else "not_found"
@@ -313,18 +316,22 @@ class WebhookProcessor:
     # --- helpers ---
 
     async def _find_payment(
-        self, session: AsyncSession, callback: ProviderCallback
+        self, session: AsyncSession, callback: ProviderCallback, *, for_update: bool = False
     ) -> Payment | None:
         """Locate the payment from OUR records only (V4). Prefer our payment_id
         (the merchant order id, carried by create/Click callbacks); fall back to
-        the stored (provider, provider_transaction_id) for confirm/cancel/status."""
+        the stored (provider, provider_transaction_id) for confirm/cancel/status.
+        A state-changing callback locks the row: a concurrent transition (expiry
+        sweep, cancel) is waited for and its result re-read, never overwritten."""
         repo = _PaymentSystemRepo(session)
         reference = callback.payment_reference
         if reference:
             payment_id = _as_uuid(reference)
             if payment_id is not None:
                 found = await repo.get_one_or_none(
-                    Payment.id == payment_id, Payment.provider == callback.provider
+                    Payment.id == payment_id,
+                    Payment.provider == callback.provider,
+                    for_update=for_update,
                 )
                 if found is not None:
                     return found
@@ -332,14 +339,15 @@ class WebhookProcessor:
             return await repo.get_one_or_none(
                 Payment.provider == callback.provider,
                 Payment.provider_transaction_id == callback.provider_txn_id,
+                for_update=for_update,
             )
         return None
 
     def _amount_ok(self, callback: ProviderCallback, payment: Payment) -> bool:
-        """Reconcile amount/currency before any transition (V4). A zero callback
-        amount means the provider did not carry one for this action (confirm/
-        cancel/status) — nothing to reconcile."""
-        if callback.amount.amount <= 0:
+        """Reconcile amount/currency before any transition (V4). ``None`` means
+        the action carries no amount (confirm/cancel/status by txn id) — nothing to
+        reconcile; any carried amount, including 0, must match exactly."""
+        if callback.amount is None:
             return True
         return callback.amount == Money(amount=payment.amount, currency=payment.currency)
 
@@ -355,7 +363,7 @@ class WebhookProcessor:
                 id=new_uuid7(),
                 provider=provider_code,
                 dedup_key=f"rejected:{digest}",
-                raw_body=raw.body,
+                raw_body=raw.body[:_REJECTED_BODY_LIMIT],
                 headers=_redact_headers(raw.headers),
                 signature_valid=False,
                 status="rejected",

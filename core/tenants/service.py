@@ -4,6 +4,10 @@ Owner of the user-tenant-role link. Tenant-context methods run as app_user (RLS
 scopes them); the two cross-tenant operations — create_tenant and
 accept_invitation — must be constructed with a maintenance-bound unit of work
 (schema §3.4), because at that moment there is no tenant context yet.
+
+A suspended tenant grants nothing: permission resolution and the membership
+check behind the tenant-token exchange both require ``tenants.status = active``,
+so an already-issued tenant token stops working on the next request.
 """
 
 from collections.abc import Sequence
@@ -11,13 +15,21 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
+from core.audit.service import AuditService
 from core.tenants.models import Invitation, Membership, Role, RolePermission, Tenant
+from core.tenants.notifications import InvitationMailer
 from core.tenants.permissions import ROLE_OWNER
 from core.tenants.repository import InvitationRepository, MembershipRepository
 from core.tenants.schemas import InvitationDTO, MembershipDTO, TenantDTO
 from shared.context import TenantContext
-from shared.errors import ConflictError, InvariantViolationError, NotFoundError
+from shared.errors import (
+    ConflictError,
+    InvariantViolationError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from shared.events import EventBus
 from shared.ids import new_uuid7
 from shared.pagination import Page, PageResult
@@ -45,38 +57,59 @@ def _membership_dto(m: Membership, role_code: str) -> MembershipDTO:
 
 
 class TenantService(Service):
-    def __init__(self, uow: UnitOfWork, bus: EventBus, ctx: TenantContext) -> None:
+    def __init__(
+        self,
+        uow: UnitOfWork,
+        bus: EventBus,
+        ctx: TenantContext,
+        *,
+        invitation_mailer: InvitationMailer | None = None,
+    ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
+        self._invitation_mailer = invitation_mailer
 
     # ------------------------------------------------------------------ reads
     async def get_permission_codes(self, user_id: UUID) -> frozenset[str]:
-        """Resolve a user's permission set in the current tenant via their role."""
+        """Resolve a user's permission set in the current tenant via their role.
+        Empty for a suspended tenant."""
         stmt = (
             select(RolePermission.permission_code)
             .join(Membership, Membership.role_id == RolePermission.role_id)
+            .join(Tenant, Tenant.id == Membership.tenant_id)
             .where(
                 Membership.tenant_id == self.ctx.tenant_id,
                 Membership.user_id == user_id,
                 Membership.status == "active",
+                Tenant.status == "active",
             )
         )
         rows = (await self._session.execute(stmt)).scalars().all()
         return frozenset(rows)
 
     async def has_active_membership(self, tenant_id: UUID, user_id: UUID) -> bool:
-        """Membership check by explicit tenant (own rows are visible via RLS
-        tenant_or_own even without a tenant context) — used for tenant selection."""
+        """Active membership in an ACTIVE tenant, by explicit tenant (own rows are
+        visible via RLS tenant_or_own even without a tenant context) — used for
+        tenant selection."""
         row = (
             await self._session.execute(
-                select(Membership.id).where(
+                select(Membership.id)
+                .join(Tenant, Tenant.id == Membership.tenant_id)
+                .where(
                     Membership.tenant_id == tenant_id,
                     Membership.user_id == user_id,
                     Membership.status == "active",
+                    Tenant.status == "active",
                 )
             )
         ).first()
         return row is not None
+
+    async def current_tenant_is_active(self) -> bool:
+        """Whether the context tenant exists and is not suspended (a tenant row
+        is visible to its own context under RLS — also for a storefront buyer)."""
+        tenant = await self._session.get(Tenant, self.ctx.tenant_id)
+        return tenant is not None and tenant.status == "active"
 
     async def get_membership(self, user_id: UUID) -> MembershipDTO | None:
         stmt = (
@@ -155,19 +188,28 @@ class TenantService(Service):
         )
         return _tenant_dto(tenant)
 
-    async def accept_invitation(self, invitation_token: str) -> MembershipDTO:
-        """Cross-tenant (maintenance UoW): join the inviting tenant."""
+    async def accept_invitation(
+        self, invitation_token: str, *, accepting_email: str
+    ) -> MembershipDTO:
+        """Cross-tenant (maintenance UoW): join the inviting tenant.
+
+        ``accepting_email`` is the caller's own account email, resolved by the
+        route under app_user (app_maintenance has no grant on users). The
+        invitation binds to the address it was sent to; it is locked FOR UPDATE,
+        so a concurrent accept waits and then sees it already accepted."""
         actor_id = self._actor_user_id()
         token_hash = hash_token(invitation_token)
         invitation = (
             await self._session.execute(
-                select(Invitation).where(Invitation.token_hash == token_hash)
+                select(Invitation).where(Invitation.token_hash == token_hash).with_for_update()
             )
         ).scalar_one_or_none()
         if invitation is None or invitation.status != "pending":
             raise NotFoundError("invitation not found or not pending")
         if invitation.expires_at <= datetime.now(UTC):
             raise InvariantViolationError("invitation expired")
+        if invitation.email != accepting_email.strip().lower():
+            raise PermissionDeniedError("invitation was issued to another email")
 
         already = (
             await self._session.execute(
@@ -216,9 +258,14 @@ class TenantService(Service):
         await self._session.flush()
         return _tenant_dto(tenant)
 
-    async def invite_member(self, email: str, role: str) -> tuple[InvitationDTO, str]:
-        """Create an invitation. Returns (dto, raw_token). In Phase 3 the token
-        is delivered via NotificationService instead of being returned."""
+    async def invite_member(self, email: str, role: str) -> InvitationDTO:
+        """Create an invitation and queue its email. The one-time token travels
+        only inside the emailed accept link; the caller never sees it."""
+        if self._invitation_mailer is None:
+            raise InvariantViolationError("invitations require an invitation mailer")
+        tenant = await self._session.get(Tenant, self.ctx.tenant_id)
+        if tenant is None:
+            raise NotFoundError("tenant not found")
         role_row = await self._tenant_or_system_role(role)
         raw_token = new_opaque_token()
         invitation = Invitation(
@@ -233,19 +280,29 @@ class TenantService(Service):
         )
         repo = InvitationRepository(self._session, self.ctx)
         try:
-            await repo.add(invitation)
-        except Exception as exc:  # unique (tenant, lower(email)) WHERE pending
+            async with self._session.begin_nested():
+                await repo.add(invitation)
+        except IntegrityError as exc:  # unique (tenant, lower(email)) WHERE pending
             raise ConflictError("a pending invitation for this email already exists") from exc
+        await self._invitation_mailer.send(
+            self._uow,
+            self._bus,
+            self.ctx,
+            email=invitation.email,
+            token=raw_token,
+            tenant_name=tenant.name,
+            locale=tenant.default_locale,
+            ttl_days=INVITATION_TTL_DAYS,
+        )
         self.emit(
             "tenants.member.invited",
             {
                 "tenant_id": str(self.ctx.tenant_id),
                 "invitation_id": str(invitation.id),
-                "email": invitation.email,
                 "role": role,
             },
         )
-        dto = InvitationDTO(
+        return InvitationDTO(
             id=invitation.id,
             tenant_id=invitation.tenant_id,
             email=invitation.email,
@@ -253,7 +310,6 @@ class TenantService(Service):
             status=invitation.status,
             expires_at=invitation.expires_at,
         )
-        return dto, raw_token
 
     async def revoke_invitation(self, invitation_id: UUID) -> None:
         repo = InvitationRepository(self._session, self.ctx)
@@ -286,8 +342,6 @@ class TenantService(Service):
         await self._session.delete(membership)
         await self._session.flush()
         # Critical action: also record directly, deduplicated by event_id (§3.5).
-        from core.audit.service import AuditService
-
         await AuditService(self._session, self.ctx).record(
             action="tenants.member.removed",
             object_type="member",

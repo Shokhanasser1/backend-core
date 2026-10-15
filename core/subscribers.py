@@ -9,7 +9,8 @@ handlers must be resolvable in the worker (interfaces doc §2.6, topology).
 import core.audit.subscribers
 import core.auth.notifications  # (password-reset email template)
 import core.billing.receipts  # (payment/subscription receipts — Task 16)
-import core.billing.subscribers  # noqa: F401  (auto-subscribe new tenants — OV-21)
+import core.billing.subscribers  # (auto-subscribe new tenants — OV-21)
+import core.tenants.notifications  # noqa: F401  (invitation email template)
 
 
 def register_core_subscribers() -> None:

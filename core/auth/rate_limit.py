@@ -14,6 +14,17 @@ LOCK_PREFIX = "auth:lock"
 TOTP_USED_PREFIX = "auth:totp_used"
 
 
+async def _incr_with_ttl(redis: Redis, key: str, ttl_seconds: int) -> int:
+    """INCR and guarantee a TTL in ONE transaction (MULTI). ``EXPIRE NX`` sets it
+    only when the key has none, so the window is not extended by later hits, yet
+    a counter can never be left without expiry (a permanent lockout)."""
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.incr(key)
+        pipe.expire(key, ttl_seconds, nx=True)
+        count, _ = await pipe.execute()
+    return int(count)
+
+
 class RateLimiter:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
@@ -21,10 +32,7 @@ class RateLimiter:
     async def hit(self, scope: str, key: str, *, limit: int, window_seconds: int) -> bool:
         """Atomic fixed-window counter. Returns True if allowed, False if the
         limit is exceeded within the window."""
-        redis_key = f"{RATE_PREFIX}:{scope}:{key}"
-        count = int(await self._redis.incr(redis_key))
-        if count == 1:
-            await self._redis.expire(redis_key, window_seconds)
+        count = await _incr_with_ttl(self._redis, f"{RATE_PREFIX}:{scope}:{key}", window_seconds)
         return count <= limit
 
 
@@ -41,9 +49,7 @@ class LoginThrottle:
 
     async def record_failure(self, account_key: str) -> None:
         fail_key = f"{FAIL_PREFIX}:{account_key}"
-        failures = int(await self._redis.incr(fail_key))
-        if failures == 1:
-            await self._redis.expire(fail_key, self._lockout_seconds)
+        failures = await _incr_with_ttl(self._redis, fail_key, self._lockout_seconds)
         if failures >= self._max_failures:
             # Exponential backoff capped at lockout_seconds: 2^(extra) minutes.
             over = failures - self._max_failures

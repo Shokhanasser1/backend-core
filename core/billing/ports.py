@@ -30,6 +30,14 @@ class RawWebhook:
     body: str  # raw request body as received
     form: Mapping[str, str] = field(default_factory=dict)  # parsed form (Click)
 
+    def header(self, name: str) -> str | None:
+        """Case-insensitive header lookup (the mapping may keep any casing)."""
+        lowered = name.lower()
+        for key, value in self.headers.items():
+            if str(key).lower() == lowered:
+                return str(value)
+        return None
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderCallback:
@@ -37,13 +45,19 @@ class ProviderCallback:
     provider_txn_id: str | None  # None only for action="check" (Payme)
     action: CallbackAction
     payment_reference: str  # our payment_id / merchant order id
-    amount: Money
+    # None: the action carries no amount (confirm/cancel/status by txn id) — there
+    # is nothing to reconcile. A carried amount that cannot be parsed is normalized
+    # to Money(0): payments are always > 0, so it can never reconcile (mismatch),
+    # and a parse failure never escapes the provider dialect as an exception.
+    amount: Money | None
     raw: Mapping[str, Any]
     # A recognized-but-unauthenticated callback is normal adversarial traffic,
     # not an exception: parse_webhook returns it with signature_valid=False so the
     # caller answers uniformly in the provider dialect (invalid_signature outcome).
     # WebhookVerificationError is reserved for unrecognizable requests (no dialect).
     signature_valid: bool = True
+    # Provider's cancel/failure reason (Payme reason code, Click error), if any.
+    reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +77,7 @@ class WebhookResponse:
 
 
 class PaymentProvider(Protocol):
-    code: ClassVar[str]  # "payme" | "click"
+    code: ClassVar[str]  # "payme" | "click" | "stripe"
 
     async def create_checkout(self, payment: PaymentDTO, return_url: str | None) -> CheckoutDTO: ...
 

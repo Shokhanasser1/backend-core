@@ -26,8 +26,14 @@ class SystemRepository[SM: Base]:
             raise TypeError(f"{type(self).__name__} must define the 'model' class attribute")
         self._session = session
 
-    async def get_one_or_none(self, *where: ColumnElement[bool]) -> SM | None:
+    async def get_one_or_none(
+        self, *where: ColumnElement[bool], for_update: bool = False
+    ) -> SM | None:
+        """``for_update`` row-locks the match for the transition the caller is
+        about to make under the elevated context (still a read here)."""
         stmt = select(self.model).where(*where).limit(2)
+        if for_update:
+            stmt = stmt.with_for_update()
         result = await self._session.execute(stmt)
         found = result.scalars().all()
         if len(found) > 1:

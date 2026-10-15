@@ -35,12 +35,24 @@
 транзакцией под `app_maintenance`. Не более 3 писем на пользователя за 15 минут;
 сверх лимита запрос молча игнорируется (ошибка выдала бы существование email).
 
+**Сессии и токены.** Заблокированный пользователь (`users.status = blocked`) не
+может ни обновить токен (вся refresh-семья отзывается), ни завершить 2FA.
+`POST /api/auth/tenants/{id}/token` возвращает **только access-токен**
+(`{access_token, token_type, expires_in}`) — долгоживущая сессия остаётся одной
+refresh-семьёй от логина; по истечении tenant-токена клиент делает `refresh` и
+обменивает заново. Recovery-код гасится атомарным CAS (`UPDATE ... WHERE used_at
+IS NULL`) — дважды не сработает даже параллельно. Счётчики rate limit/lockout —
+`INCR` + `EXPIRE NX` в одной транзакции Redis (ключ без TTL невозможен).
+Регистрация ограничена `REGISTER_IP_LIMIT_PER_HOUR` с одного IP.
+
 ## События (публикует)
 
 `auth.user.registered`, `auth.user.login_succeeded`, `auth.user.login_failed`,
 `auth.user.password_changed`, `auth.user.password_reset_requested`,
 `auth.user.two_factor_enabled`, `auth.user.two_factor_disabled`.
-Подписок нет.
+Подписок нет. Полезная нагрузка — идентификаторы, без email (ПД). `login_failed`
+публикуется сразу (`emit_now`): запрос заканчивается откатом, транзакционный
+`emit` пропал бы вместе с ним.
 
 ## Права
 

@@ -1,8 +1,11 @@
 """Click Merchant (SHOP-API) adapter (interfaces §4.1).
 
 Click drives the flow with two form-encoded callbacks: Prepare (action=0) and
-Complete (action=1). Authentication is an ``md5`` ``sign_string`` over the request
-fields plus the secret key, compared in constant time. Amounts are in **sums**
+Complete (action=1). A Complete carrying ``error < 0`` is Click reporting that the
+payment FAILED on its side (e.g. -5017 insufficient funds): it is normalized to a
+``cancel`` and answered with -9 "Transaction cancelled", never confirmed.
+Authentication is an ``md5`` ``sign_string`` over the request fields plus the
+secret key, compared in constant time. Amounts are in **sums**
 (possibly with a decimal fraction); UZS in our ledger has exponent 0, so a Click
 amount maps 1:1 to ledger minor units (the fractional part, if any, must be zero).
 """
@@ -39,6 +42,7 @@ ERR_INCORRECT_AMOUNT = -2
 ERR_ALREADY_PAID = -4
 ERR_ORDER_NOT_FOUND = -5
 ERR_TRANSACTION_NOT_FOUND = -6
+ERR_TRANSACTION_CANCELLED = -9
 
 _ERROR_CODES: dict[str, tuple[int, str]] = {
     "invalid_signature": (ERR_SIGN_CHECK_FAILED, "SIGN CHECK FAILED"),
@@ -113,14 +117,26 @@ class ClickProvider:
         if action is None:
             raise WebhookVerificationError(f"click: unsupported action {action_code!r}")
 
+        amount: Money | None
+        try:
+            amount = Money(minor_units_from_sum(form.get("amount", "0")), CLICK_CURRENCY)
+        except PaymentProviderError:
+            amount = Money(0, CLICK_CURRENCY)  # unparseable: never reconciles
+        reason = None
+        click_error = _int_or_none(form.get("error"))
+        if action == "confirm" and click_error is not None and click_error < 0:
+            # Click reports a failed payment: cancel ours, nothing to reconcile.
+            action, amount, reason = "cancel", None, str(click_error)
+
         return ProviderCallback(
             provider=self.code,
             provider_txn_id=str(form.get("click_trans_id")),
             action=action,
             payment_reference=str(form.get("merchant_trans_id", "")),
-            amount=Money(minor_units_from_sum(form.get("amount", "0")), CLICK_CURRENCY),
+            amount=amount,
             raw=dict(form),
             signature_valid=self._sign_ok(form, action_code),
+            reason=reason,
         )
 
     def build_webhook_response(self, outcome: CallbackOutcome) -> WebhookResponse:
@@ -137,7 +153,11 @@ class ClickProvider:
         if prepare_id is not None:
             body["merchant_prepare_id"] = prepare_id
 
-        if outcome.status in ("ok", "already_processed"):
+        canceled = outcome.callback is not None and outcome.callback.action == "cancel"
+        if outcome.status in ("ok", "already_processed") and canceled:
+            body["error"] = ERR_TRANSACTION_CANCELLED
+            body["error_note"] = "Transaction cancelled"
+        elif outcome.status in ("ok", "already_processed"):
             body["error"] = ERR_SUCCESS
             body["error_note"] = "Success"
         else:
@@ -173,3 +193,10 @@ class ClickProvider:
         )
         # md5 is mandated by the Click SHOP-API signature scheme; not our choice.
         return hashlib.md5("".join(parts).encode()).hexdigest()  # noqa: S324  # nosec B324
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(str(value))
+    except ValueError:
+        return None

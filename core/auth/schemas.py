@@ -25,6 +25,15 @@ class TokenPair(_Frozen):
     expires_in: int  # access token TTL seconds
 
 
+class AccessToken(_Frozen):
+    """A short-lived access token alone (tenant-token exchange): no refresh
+    token, so a leaked access token never turns into a long-lived session."""
+
+    access_token: str
+    token_type: str = "bearer"  # noqa: S105 - protocol label, not a secret
+    expires_in: int  # access token TTL seconds
+
+
 class TwoFactorChallenge(_Frozen):
     challenge_token: str
     two_factor_required: bool = True

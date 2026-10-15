@@ -54,6 +54,13 @@ class PaymentDTO(_Frozen):
     reference: str
     provider: str
     paid_at: datetime | None
+    # Provider-transaction lifecycle, recorded once and replayed verbatim (Payme
+    # answers CheckTransaction/duplicates with the SAME times): when the provider
+    # opened its transaction (-> pending) and when the payment was closed without
+    # success (canceled/failed/expired), plus the provider's reason, if any.
+    pending_at: datetime | None = None
+    closed_at: datetime | None = None
+    failure_code: str | None = None
 
     _ser_amount = field_serializer("amount")(_money_json)
 

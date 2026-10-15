@@ -6,7 +6,7 @@ FAKE PaymentProvider (the real Payme/Click adapters land in task 12). Verifies:
 - mark_succeeded of a subscription payment -> subscription active in the SAME
   transaction ("money taken, subscription inactive" impossible by construction);
 - create_payment idempotency by (tenant, idempotency_key);
-- the one-live-subscription-per-tenant invariant (partial-unique -> ConflictError);
+- one pending checkout per tenant (a repeated start replays it);
 - auto_subscribe of the zero-price plan (no payment, immediately active).
 """
 
@@ -24,7 +24,6 @@ from core.billing.schemas import CheckoutDTO, PaymentDTO
 from core.billing.service import BillingService, PaymentService
 from shared.context import Actor, TenantContext
 from shared.db_provisioning import ROLE_MIGRATOR
-from shared.errors import ConflictError
 from shared.events import EventBus
 from shared.money import Money
 from shared.service import SqlAlchemyUnitOfWork
@@ -223,21 +222,24 @@ async def test_create_payment_is_idempotent_by_key(
     assert count == 1
 
 
-async def test_second_live_subscription_conflicts(
+async def test_repeated_start_returns_the_same_checkout(
     session_factory: async_sessionmaker[AsyncSession],
     billing_ctx: TenantContext,
     test_settings: Settings,
 ) -> None:
+    # One pending checkout per tenant: re-clicking it replays the checkout instead
+    # of opening a second one (a different plan/provider conflicts — see
+    # test_billing_lifecycle).
     bus, provider = EventBus(), FakePaymentProvider()
     async with SqlAlchemyUnitOfWork(session_factory, context=billing_ctx) as uow:
         billing = _billing(uow, bus, billing_ctx, test_settings, provider)
-        await billing.start_subscription(PRO_PLAN, provider.code)
+        first = await billing.start_subscription(PRO_PLAN, provider.code)
 
-    with pytest.raises(ConflictError):
-        async with SqlAlchemyUnitOfWork(session_factory, context=billing_ctx) as uow:
-            billing = _billing(uow, bus, billing_ctx, test_settings, provider)
-            await billing.start_subscription(PRO_PLAN, provider.code)
+    async with SqlAlchemyUnitOfWork(session_factory, context=billing_ctx) as uow:
+        billing = _billing(uow, bus, billing_ctx, test_settings, provider)
+        second = await billing.start_subscription(PRO_PLAN, provider.code)
 
+    assert second.payment_id == first.payment_id
     async with SqlAlchemyUnitOfWork(session_factory, context=billing_ctx) as uow:
         subs = (
             await uow.session.execute(select(func.count()).select_from(Subscription))

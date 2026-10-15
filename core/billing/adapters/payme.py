@@ -9,15 +9,16 @@ test.
 
 The payment state machine lives in billing (state_machine.py), not here: this
 adapter only verifies, normalizes inbound callbacks, and renders the JSON-RPC
-answer for an outcome billing computed.
+answer for an outcome billing computed. Transaction times (create/perform/
+cancel) are the ones billing recorded at the transition, so a duplicate call or a
+CheckTransaction always gets the same values Payme saw first.
 """
 
 import base64
 import binascii
 import hmac
 import json
-from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, ClassVar
 
 from core.billing.ports import (
@@ -43,10 +44,13 @@ _METHOD_ACTIONS: dict[str, CallbackAction] = {
     "CancelTransaction": "cancel",
     "CheckTransaction": "status",
 }
+# Methods keyed by Payme's transaction id (no account, no amount).
+_TXN_KEYED_ACTIONS = frozenset({"confirm", "cancel", "status"})
 
 # Payme JSON-RPC error codes (subset used by this integration).
 ERR_INSUFFICIENT_PRIVILEGE = -32504
 ERR_INVALID_AMOUNT = -31001
+ERR_TRANSACTION_NOT_FOUND = -31003
 ERR_UNABLE_TO_PERFORM = -31008
 ERR_ORDER_NOT_FOUND = -31050  # merchant-defined range (-31099..-31050)
 
@@ -56,6 +60,13 @@ _ERROR_MESSAGES: dict[str, tuple[int, str]] = {
     "invalid_state": (ERR_UNABLE_TO_PERFORM, "Unable to perform operation"),
     "not_found": (ERR_ORDER_NOT_FOUND, "Order not found"),
 }
+
+# Payme transaction states: 1 open, 2 performed, -1 canceled before perform.
+STATE_OPEN = 1
+STATE_PERFORMED = 2
+STATE_CANCELED = -1
+# Payme cancel reason for a transaction closed on timeout (our checkout expiry).
+REASON_TIMEOUT = 4
 
 
 def to_tiyin(money: Money) -> int:
@@ -73,8 +84,24 @@ def minor_units_from_tiyin(tiyin: int) -> int:
     return tiyin // TIYIN_PER_SUM
 
 
-def _now_ms() -> int:
-    return int(datetime.now(UTC).timestamp() * 1000)
+def _ms(moment: datetime | None) -> int:
+    return int(moment.timestamp() * 1000) if moment is not None else 0
+
+
+def _state(payment: PaymentDTO) -> int:
+    if payment.status == "succeeded":
+        return STATE_PERFORMED
+    if payment.status in ("created", "pending"):
+        return STATE_OPEN
+    return STATE_CANCELED  # canceled/failed/expired before perform (no refunds in v1)
+
+
+def _reason(payment: PaymentDTO) -> int | None:
+    if _state(payment) != STATE_CANCELED:
+        return None
+    if payment.failure_code is not None and payment.failure_code.lstrip("-").isdigit():
+        return int(payment.failure_code)
+    return REASON_TIMEOUT if payment.status == "expired" else None
 
 
 class PaymeProvider:
@@ -95,7 +122,8 @@ class PaymeProvider:
 
     async def create_checkout(self, payment: PaymentDTO, return_url: str | None) -> CheckoutDTO:
         # Payme checkout is a base64-encoded parameter string appended to the URL;
-        # no server-to-server call, so nothing to retry here.
+        # no server-to-server call, so nothing to retry here. return_url is
+        # validated by PaymentService (no ';' that could inject a parameter).
         params = [
             f"m={self._merchant_id}",
             f"ac.{self.account_field}={payment.id}",
@@ -109,7 +137,7 @@ class PaymeProvider:
             payment_id=payment.id,
             provider=self.code,
             checkout_url=f"{self.checkout_base_url}/{encoded}",
-            expires_at=None,  # our own TTL/expiry job governs abandonment (task 13)
+            expires_at=None,  # our own TTL/expiry job governs abandonment
         )
 
     def parse_webhook(self, raw: RawWebhook) -> ProviderCallback:
@@ -125,6 +153,7 @@ class PaymeProvider:
             raise WebhookVerificationError("payme: params is not an object")
 
         provider_txn_id, reference, amount = self._normalize(action, params)
+        reason = params.get("reason") if action == "cancel" else None
         return ProviderCallback(
             provider=self.code,
             provider_txn_id=provider_txn_id,
@@ -132,12 +161,23 @@ class PaymeProvider:
             payment_reference=reference,
             amount=amount,
             raw={"id": data.get("id"), "method": method, "params": params},
-            signature_valid=self._auth_ok(raw.headers),
+            signature_valid=self._auth_ok(raw),
+            reason=str(reason) if reason is not None else None,
         )
 
     def build_webhook_response(self, outcome: CallbackOutcome) -> WebhookResponse:
         request_id = self._request_id(outcome)
-        if outcome.status in ("ok", "already_processed"):
+        action = outcome.callback.action if outcome.callback is not None else None
+        status = outcome.status
+        if (
+            action == "create"
+            and status in ("ok", "already_processed")
+            and outcome.payment is not None
+            and outcome.payment.status != "pending"
+        ):
+            # A repeated CreateTransaction is answered only while it is still open.
+            status = "invalid_state"
+        if status in ("ok", "already_processed"):
             # A repeated delivery is answered deterministically from payment state
             # (same result as the first success) — Payme dedups on our transaction.
             return WebhookResponse(
@@ -145,8 +185,10 @@ class PaymeProvider:
                 body={"result": self._success_result(outcome), "id": request_id},
             )
         code, message = _ERROR_MESSAGES.get(
-            outcome.status, (ERR_UNABLE_TO_PERFORM, "Unable to perform operation")
+            status, (ERR_UNABLE_TO_PERFORM, "Unable to perform operation")
         )
+        if status == "not_found" and action in _TXN_KEYED_ACTIONS:
+            code, message = ERR_TRANSACTION_NOT_FOUND, "Transaction not found"
         return WebhookResponse(
             status_code=200,
             body={"error": {"code": code, "message": message}, "id": request_id},
@@ -163,8 +205,8 @@ class PaymeProvider:
             raise WebhookVerificationError("payme: not a JSON-RPC request")
         return data
 
-    def _auth_ok(self, headers: Mapping[str, str]) -> bool:
-        header = _header(headers, "authorization")
+    def _auth_ok(self, raw: RawWebhook) -> bool:
+        header = raw.header("authorization")
         if not header or not header.lower().startswith("basic "):
             return False
         try:
@@ -175,21 +217,23 @@ class PaymeProvider:
 
     def _normalize(
         self, action: CallbackAction, params: dict[str, Any]
-    ) -> tuple[str | None, str, Money]:
+    ) -> tuple[str | None, str, Money | None]:
         """Return (provider_txn_id, payment_reference, amount). For confirm/cancel/
-        status Payme sends only its transaction id — reference/amount are looked up
-        from the stored payment by the router (task 13), so they are left empty."""
+        status Payme sends only its transaction id — the payment is located by it
+        and carries no amount to reconcile (None)."""
         if action in ("check", "create"):
             account = params.get("account") or {}
             reference = (
                 str(account.get(self.account_field, "")) if isinstance(account, dict) else ""
             )
-            amount = Money(minor_units_from_tiyin(params.get("amount", 0)), PAYME_CURRENCY)
+            try:
+                amount = Money(minor_units_from_tiyin(params.get("amount", 0)), PAYME_CURRENCY)
+            except PaymentProviderError:
+                amount = Money(0, PAYME_CURRENCY)  # unparseable: never reconciles
             provider_txn_id = str(params["id"]) if action == "create" and "id" in params else None
             return provider_txn_id, reference, amount
-        # confirm | cancel | status: keyed by Payme's transaction id only.
         provider_txn_id = str(params["id"]) if "id" in params else None
-        return provider_txn_id, "", Money(0, PAYME_CURRENCY)
+        return provider_txn_id, "", None
 
     def _request_id(self, outcome: CallbackOutcome) -> Any:
         if outcome.callback is not None:
@@ -197,27 +241,38 @@ class PaymeProvider:
         return None
 
     def _success_result(self, outcome: CallbackOutcome) -> dict[str, Any]:
-        """Provider-dialect success payload. The transaction lifecycle fields
-        (create_time/perform_time/state) are finalized in task 13 once Payme's
-        per-transaction timestamps are persisted; here we render what the action
-        determines unambiguously."""
+        """Provider-dialect success payload, rendered from the payment's recorded
+        transaction times — identical for the first answer and every replay."""
         action = outcome.callback.action if outcome.callback is not None else None
         if action == "check":
             return {"allow": True}
-        transaction = str(outcome.payment.id) if outcome.payment is not None else ""
+        payment = outcome.payment
+        if payment is None:  # pragma: no cover - success outcomes always carry a payment
+            return {}
+        transaction = str(payment.id)
         if action == "create":
-            return {"create_time": _now_ms(), "transaction": transaction, "state": 1}
+            return {
+                "create_time": _ms(payment.pending_at),
+                "transaction": transaction,
+                "state": _state(payment),
+            }
         if action == "confirm":
-            return {"transaction": transaction, "perform_time": _now_ms(), "state": 2}
+            return {
+                "transaction": transaction,
+                "perform_time": _ms(payment.paid_at),
+                "state": _state(payment),
+            }
         if action == "cancel":
-            return {"transaction": transaction, "cancel_time": _now_ms(), "state": -1}
-        return {"transaction": transaction, "state": 2}
-
-
-def _header(headers: Mapping[str, str], name: str) -> str | None:
-    """Case-insensitive header lookup over a plain mapping."""
-    lowered = name.lower()
-    for key, value in headers.items():
-        if str(key).lower() == lowered:
-            return str(value)
-    return None
+            return {
+                "transaction": transaction,
+                "cancel_time": _ms(payment.closed_at),
+                "state": _state(payment),
+            }
+        return {
+            "create_time": _ms(payment.pending_at),
+            "perform_time": _ms(payment.paid_at),
+            "cancel_time": _ms(payment.closed_at),
+            "transaction": transaction,
+            "state": _state(payment),
+            "reason": _reason(payment),
+        }

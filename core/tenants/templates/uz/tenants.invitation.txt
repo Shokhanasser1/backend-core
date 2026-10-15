@@ -1,0 +1,5 @@
+Sizni «$tenant_name» ga qo'shilishga taklif qilishdi. Taklifni qabul qilish uchun shu manzil bilan tizimga kiring va havolaga o'ting:
+
+$accept_url
+
+Taklif bir martalik va $ttl_days kun amal qiladi. Agar siz bu xatni kutmagan bo'lsangiz, uni e'tiborsiz qoldiring.

@@ -17,6 +17,7 @@ from core.tenants.schemas import (
     AcceptInvitationIn,
     ChangeMemberRoleIn,
     CreateTenantIn,
+    InvitationDTO,
     InviteMemberIn,
     MembershipDTO,
     TenantDTO,
@@ -54,9 +55,16 @@ async def list_my_tenants(bundle: ServiceBundle = Depends(authed_bundle)) -> Seq
     dependencies=[Depends(authenticated_endpoint("user-scoped: accept an invitation"))],
 )
 async def accept_invitation(
-    body: AcceptInvitationIn, bundle: ServiceBundle = Depends(maintenance_bundle)
+    body: AcceptInvitationIn,
+    bundle: ServiceBundle = Depends(maintenance_bundle),
+    me: ServiceBundle = Depends(authed_bundle),
 ) -> MembershipDTO:
-    return await bundle.tenants.accept_invitation(body.invitation_token)
+    # The invitation binds to the invited address: resolve the caller's own email
+    # under app_user (the maintenance role has no grant on users).
+    profile = await me.auth.get_user(me.user_id)
+    return await bundle.tenants.accept_invitation(
+        body.invitation_token, accepting_email=profile.email
+    )
 
 
 # --- tenant-context (require_permission) ---
@@ -97,10 +105,9 @@ async def list_members(
 )
 async def invite_member(
     body: InviteMemberIn, bundle: ServiceBundle = Depends(authed_bundle)
-) -> dict[str, object]:
-    dto, raw_token = await bundle.tenants.invite_member(body.email, body.role)
-    # v1: the token is returned here until Phase 3 delivers it via notifications.
-    return {"invitation": dto.model_dump(mode="json"), "invitation_token": raw_token}
+) -> dict[str, InvitationDTO]:
+    # The one-time token goes only by email (core/tenants/notifications.py).
+    return {"invitation": await bundle.tenants.invite_member(body.email, body.role)}
 
 
 @router.delete(

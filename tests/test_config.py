@@ -29,6 +29,7 @@ _PROD_SECRETS: dict[str, Any] = {
     "jwt_secret": "x" * 32,
     "secret_encryption_keys": Fernet.generate_key().decode(),
     "password_reset_url": "https://app.example.uz/reset-password#token={token}",
+    "invitation_accept_url": "https://app.example.uz/accept-invitation#token={token}",
 }
 
 
@@ -52,6 +53,10 @@ def test_env_variables_win(monkeypatch: pytest.MonkeyPatch) -> None:
             {"password_reset_url": "http://localhost:3000/reset-password#token={token}"},
             "PASSWORD_RESET_URL",
         ),
+        (
+            {"invitation_accept_url": "http://localhost:3000/accept-invitation#token={token}"},
+            "INVITATION_ACCEPT_URL",
+        ),
     ],
 )
 def test_prod_refuses_dev_secrets(override: dict[str, Any], complaint: str) -> None:
@@ -67,6 +72,8 @@ def test_dev_keeps_insecure_defaults_for_zero_config_start() -> None:
     assert Settings(_env_file=None).jwt_secret == "dev-insecure-change-me"
 
 
-def test_password_reset_url_must_carry_token_placeholder() -> None:
+@pytest.mark.parametrize("field", ["password_reset_url", "invitation_accept_url"])
+def test_emailed_links_must_carry_token_placeholder(field: str) -> None:
+    link: dict[str, Any] = {field: "https://app.example.uz/page"}
     with pytest.raises(ValidationError, match="token"):
-        Settings(_env_file=None, password_reset_url="https://app.example.uz/reset")
+        Settings(_env_file=None, **link)

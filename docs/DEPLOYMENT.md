@@ -32,6 +32,8 @@
   реальные `DATABASE_*_URL` (по роли), креды провайдеров/каналов
   (`PAYME_*`, `CLICK_*`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SMTP_*`,
   `TELEGRAM_BOT_TOKEN`, `ESKIZ_*`).
+- Ссылки из писем — на прод-фронтенд: `PASSWORD_RESET_URL`, `INVITATION_ACCEPT_URL`
+  (с `{token}`; с dev-дефолтами `APP_ENV=prod` не стартует).
 - Хранить в секрет-менеджере (Vault / cloud secrets), не в файлах образа.
 - `CORS_ORIGINS` — строгий белый список; пусто = кросс-домен запрещён.
 - `ENABLED_PAYMENT_PROVIDERS` — включать только провайдеров с настроенными
@@ -51,7 +53,15 @@
   X-Frame-Options, Referrer-Policy — `app/middleware.py`); HSTS имеет смысл только
   под HTTPS.
 - Прокси должен пробрасывать реальный клиентский IP (для аудита `ip`) и
-  `X-Request-ID` при наличии.
+  `X-Request-ID` при наличии. uvicorn верит `X-Forwarded-For` только от адресов
+  из `FORWARDED_ALLOW_IPS` (дефолт `127.0.0.1`) — выставить адрес/подсеть прокси,
+  иначе все клиенты «приходят» с IP прокси и делят per-IP лимиты логина и
+  регистрации (один злоумышленник блокирует вход всем).
+- Входящий `X-Request-ID` принимается только как короткий токен `[A-Za-z0-9._:-]`
+  (до 128 символов), иначе генерируется свой.
+- Тело запроса режется на входе: `MAX_REQUEST_BODY_BYTES` (дефолт 1 МиБ), загрузка
+  файлов — `FILES_MAX_UPLOAD_BYTES` + запас на multipart → 413. На прокси держать
+  такой же или меньший лимит (`client_max_body_size`).
 
 ## 5. Бэкапы БД и проверка восстановления
 
@@ -86,7 +96,9 @@
 ## 8. Воркер и фоновые джобы (arq)
 
 `worker` обязателен (иначе события шины, уведомления и ретенция не идут). Cron
-(`app/worker.py`): `expire_checkouts` (5 мин), `dispatch_notifications` (15 с),
+(`app/worker.py`): `expire_checkouts` (5 мин), `close_ended_subscriptions` (раз в
+час: истёкший платный период закрывается с откатом на free-план, бесплатный —
+продлевается), `dispatch_notifications` (15 с),
 `purge_retention` (03:00 — `audit_log` как `app_retention`; `processed_events` и
 PII-строки `notification_outbox` как `app_maintenance`). Воркеру нужен
 `DATABASE_RETENTION_URL`. Настройки ретенции: `AUDIT_RETENTION_DAYS`,

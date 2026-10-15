@@ -22,10 +22,16 @@ from core.auth.access_service import AccessService
 from core.auth.notifications import PasswordResetMailer
 from core.auth.security.tokens import decode_access_token
 from core.auth.service import AuthService
+from core.tenants.notifications import InvitationMailer
 from core.tenants.service import TenantService
 from shared.context import Actor, RequestContext, TenantContext
 from shared.endpoint_markers import AUTHENTICATED_ATTR, PERMISSION_ATTR, PUBLIC_ATTR
-from shared.errors import AuthenticationError, InvariantViolationError, PermissionDeniedError
+from shared.errors import (
+    AuthenticationError,
+    InvariantViolationError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from shared.service import SqlAlchemyUnitOfWork, UnitOfWork
 
 
@@ -99,7 +105,12 @@ async def _open_bundle(
     factory = database.maintenance_sessions if maintenance else database.user_sessions
     uow = SqlAlchemyUnitOfWork(factory, context=ctx)
     async with uow:
-        tenants = TenantService(uow, state.bus, ctx)
+        tenants = TenantService(
+            uow,
+            state.bus,
+            ctx,
+            invitation_mailer=InvitationMailer(state.cipher, state.settings.invitation_accept_url),
+        )
         bundle = ServiceBundle(
             ctx=ctx,
             request=_request_context(request),
@@ -172,6 +183,9 @@ async def storefront_bundle(request: Request) -> AsyncIterator[ServiceBundle]:
     (OV-39). Paired with the ``authenticated_endpoint`` marker on storefront routes."""
     ctx = _storefront_context(request)
     async for bundle in _open_bundle(request, ctx, maintenance=False):
+        # A suspended (or unknown) shop has no storefront.
+        if not await bundle.tenants.current_tenant_is_active():
+            raise NotFoundError("shop not found")
         yield bundle
 
 

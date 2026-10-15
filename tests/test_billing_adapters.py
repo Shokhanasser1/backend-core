@@ -8,6 +8,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from collections.abc import Mapping
 from urllib.parse import parse_qs
 from uuid import uuid4
@@ -287,9 +288,8 @@ def _stripe(transport: httpx.MockTransport | None = None) -> StripeProvider:
     )
 
 
-def _stripe_sig(
-    body: str, *, secret: str = STRIPE_WEBHOOK_SECRET, timestamp: str = "1700000000"
-) -> str:
+def _stripe_sig(body: str, *, secret: str = STRIPE_WEBHOOK_SECRET, timestamp: str = "") -> str:
+    timestamp = timestamp or str(int(time.time()))
     signed = f"{timestamp}.{body}".encode()
     v1 = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
     return f"t={timestamp},v1={v1}"
@@ -352,19 +352,17 @@ async def test_stripe_create_checkout_calls_api_and_returns_url() -> None:
     assert fields["cancel_url"] == ["https://shop.example/cancel"]
 
 
-async def test_stripe_create_checkout_retries_5xx_then_succeeds() -> None:
+async def test_stripe_create_checkout_5xx_is_surfaced_without_retry() -> None:
     calls: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(1)
-        if len(calls) == 1:
-            return httpx.Response(503)  # transient -> retried
-        return httpx.Response(200, json={"id": "cs_2", "url": "https://checkout.stripe.com/c/cs_2"})
+        return httpx.Response(503)
 
     payment = _payment().model_copy(update={"provider": "stripe", "amount": Money(5000, "USD")})
-    checkout = await _stripe(httpx.MockTransport(handler)).create_checkout(payment, None)
-    assert checkout.checkout_url.endswith("cs_2")
-    assert len(calls) == 2  # first 503 retried
+    with pytest.raises(PaymentProviderError):
+        await _stripe(httpx.MockTransport(handler)).create_checkout(payment, None)
+    assert len(calls) == 1  # in-request call: no retries (idempotency key covers it)
 
 
 async def test_stripe_create_checkout_4xx_is_permanent_no_retry() -> None:
@@ -403,7 +401,7 @@ def test_stripe_parse_expired_is_cancel() -> None:
     )
     assert callback.action == "cancel"
     assert callback.payment_reference == payment_id
-    assert callback.amount.amount == 0  # cancel skips amount reconciliation
+    assert callback.amount is None  # cancel carries no amount to reconcile
 
 
 def test_stripe_parse_unhandled_event_is_readonly_noop() -> None:

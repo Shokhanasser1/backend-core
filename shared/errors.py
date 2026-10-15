@@ -51,6 +51,14 @@ class AuthenticationError(DomainError):
     http_status = 401
 
 
+class PayloadTooLargeError(DomainError):
+    """Request body over the configured cap (raised at the ASGI edge)."""
+
+    code = "payload_too_large"
+    message_key = "errors.payload_too_large"
+    http_status = 413
+
+
 class RateLimitedError(DomainError):
     code = "rate_limited"
     message_key = "errors.rate_limited"
