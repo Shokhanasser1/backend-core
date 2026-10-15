@@ -1,7 +1,8 @@
 """Public DTOs of crm.deals (Pydantic frozen).
 
 PATCH convention (template-wide, as in commerce.products / crm.contacts): a field
-left unset (``None``) means "leave unchanged". The deal keeps ids of the linked
+left unset (``None``) means "leave unchanged". Exception: ``contact_id`` /
+``company_id`` sent as an explicit JSON ``null`` clear the link. The deal keeps ids of the linked
 contact/company (not their details) — a caller fetches those through ContactsService.
 """
 

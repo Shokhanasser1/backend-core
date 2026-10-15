@@ -1,7 +1,7 @@
 name = "commerce.orders"
 description = "Заказы покупателя: оформление, оплата через billing, чек, admin-экран."
 requires_features = ["commerce.products"]
-requires_core = ["auth", "tenants", "billing", "notifications"]
+requires_core = ["auth", "tenants", "billing", "notifications", "admin"]
 owns_tables = ["commerce_orders", "commerce_order_items"]
 publishes_events = [
     "commerce.order.created",

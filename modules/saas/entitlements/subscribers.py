@@ -1,9 +1,9 @@
 """saas.entitlements <- billing: keep the tenant's active plan in step (§2.6).
 
 Billing owns money and subscriptions; it never knows about entitlements. This
-feature reacts to billing's PUBLIC events and maps the active plan_code onto the
-tenant's entitlement row. Reliable subscribers keyed to explicit event names
-(features may not use wildcards — §1.1); they run inside the worker's UoW +
+feature reacts to billing's PUBLIC events (activated / canceled / ended) and maps
+the active plan_code onto the tenant's entitlement row. Reliable subscribers keyed
+to explicit event names (features may not use wildcards — §1.1); they run inside the worker's UoW +
 tenant context (reconstructed from the envelope), so writes pass RLS. Registered
 by importing this module in the feature's ``install()`` (web) and the worker's
 module install, so the handlers are resolvable in the arq worker.
@@ -37,3 +37,15 @@ async def on_subscription_canceled(event: EventEnvelope) -> None:
         return
     service = EntitlementService(runtime.uow, runtime.bus, runtime.ctx)
     await service.mark_canceled()
+
+
+@bus.subscribe("billing.subscription.ended", reliable=True)
+async def on_subscription_ended(event: EventEnvelope) -> None:
+    """A paid period ended without renewal: its entitlements lapse (the free
+    fallback arrives as its own billing.subscription.activated)."""
+    plan_code = str(event.payload.get("plan_code") or "")
+    runtime = current_handler_runtime()
+    if not plan_code or runtime.ctx.tenant_id is None:
+        return
+    service = EntitlementService(runtime.uow, runtime.bus, runtime.ctx)
+    await service.end_plan(plan_code, event.occurred_at)

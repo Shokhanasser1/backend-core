@@ -1,6 +1,6 @@
 name = "commerce.cart"
-description = "Корзина покупателя (storefront): позиции, чекаут."
-requires_features = ["commerce.products"]
+description = "Корзина покупателя (storefront): позиции, чекаут в заказ с оплатой."
+requires_features = ["commerce.products", "commerce.orders"]
 requires_core = ["auth", "tenants"]
 owns_tables = ["commerce_carts", "commerce_cart_items"]
 publishes_events = ["commerce.cart.checked_out"]

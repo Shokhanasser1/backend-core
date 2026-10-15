@@ -26,13 +26,15 @@ CRM_DEAL_STAGES=lead,qualified,proposal,won,lost
 
 - `create(title, amount, currency=, stage=None, contact_id=None, company_id=None, notes=None)`
   — стадия по умолчанию = первая сконфигурированная; ключи связей валидируются.
-- `update(deal_id, …)` — PATCH-семантика (`None` = не менять).
+- `update(deal_id, …, clear_contact=False, clear_company=False)` — PATCH-семантика
+  (`None` = не менять); в HTTP явный `"contact_id": null` / `"company_id": null`
+  снимает ссылку.
 - `get(deal_id)` / `list(page, stage=, contact_id=, company_id=)` / `delete(deal_id)`.
 
 Суммы — целые минимальные единицы + `currency` (`shared/money.py`), валюта
 проверяется по `CurrencyRegistry` (без `float`). Связи — «голые» Uuid, проверка
-существования (в том же тенанте) через `ContactsService.get_contact/get_company`
-(чужой/несуществующий id → `404`).
+существования (в том же тенанте) через `ContactsService.ensure_contact/ensure_company`
+(чужой/несуществующий id → `404`). Права проверяются и на роуте, и в сервисе.
 
 ## Роуты
 
@@ -54,7 +56,9 @@ read/create/update, но **не delete** (обязательный негати�
 
 Публикует `crm.deal.{created,updated,deleted}` и **`crm.deal.stage_changed`**
 (`{deal_id, from, to}` — когда update меняет стадию; полезно для автоматизаций).
-Ничего не слушает.
+**Слушает** (reliable) `crm.contact.deleted` и `crm.company.deleted` — снимает
+ссылку со всех сделок тенанта (публикует `crm.deal.updated` по каждой), чтобы ни
+одна сделка не указывала на удалённого человека/компанию.
 
 ## Перенос в клиентский проект
 

@@ -9,7 +9,10 @@ features call ``complete_step`` at the milestone, and an authenticated route let
 the frontend mark user-driven steps. Onboarding does not subscribe to the bus
 (features may not use wildcards — §1.1 — and a generic checklist must not hardwire
 other modules' event names). ``saas.onboarding.completed`` is emitted once, when
-the final configured step is completed.
+the final configured step is completed. Completions are serialized per tenant
+(advisory lock held to the end of the transaction): two steps finishing at the
+same time see each other, so the event fires exactly once, and a repeated step is
+idempotent instead of a unique-index collision.
 """
 
 from datetime import UTC, datetime
@@ -20,6 +23,7 @@ from modules.saas.onboarding.schemas import OnboardingProgressDTO, OnboardingSte
 from shared.context import TenantContext
 from shared.errors import InvariantViolationError
 from shared.events import EventBus
+from shared.locks import advisory_xact_lock
 from shared.service import Service, UnitOfWork
 
 
@@ -38,6 +42,7 @@ class OnboardingService(Service):
         the last remaining step."""
         if step_key not in self._steps:
             raise InvariantViolationError(f"unknown onboarding step: {step_key!r}")
+        await advisory_xact_lock(self._session, f"saas.onboarding:{self.ctx.tenant_id}")
         completed = await self._completed()
         if step_key in completed:
             return self._to_dto(completed)  # already done — idempotent, no re-emit

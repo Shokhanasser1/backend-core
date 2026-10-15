@@ -5,14 +5,20 @@ Manages two entities of one feature: companies (organizations) and contacts
 validated through the tenant-scoped CompanyRepository, so a foreign/missing
 company id is a 404 (never a cross-tenant leak) before the FK ever sees it.
 
-Siblings (deals, tasks — later) will read people/companies through this service,
-never crm_contacts/crm_companies directly. Events are emitted post-commit by the
-Service base. PATCH semantics: an argument left ``None`` leaves the field
-unchanged (template-wide convention, see schemas).
+Siblings (deals, tasks — later) read people/companies through this service, never
+crm_contacts/crm_companies directly; for link validation they use
+``ensure_contact`` / ``ensure_company`` (existence only, no permission of the
+address book needed). Every other method is RBAC-checked here as well as on the
+route (PermissionGuard). Events are emitted post-commit by the Service base.
+PATCH semantics: an argument left ``None`` leaves the field unchanged
+(template-wide convention, see schemas).
 """
 
 from uuid import UUID
 
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
+from modules.crm.contacts import permissions as perms
 from modules.crm.contacts.models import Company, Contact
 from modules.crm.contacts.repository import CompanyRepository, ContactRepository
 from modules.crm.contacts.schemas import CompanyDTO, ContactDTO
@@ -31,11 +37,27 @@ def _contact_dto(contact: Contact) -> ContactDTO:
 
 
 class ContactsService(Service):
-    def __init__(self, uow: UnitOfWork, bus: EventBus, ctx: TenantContext) -> None:
+    def __init__(
+        self,
+        uow: UnitOfWork,
+        bus: EventBus,
+        ctx: TenantContext,
+        *,
+        access: AccessService | None = None,
+    ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._companies = CompanyRepository(uow.session, ctx)
         self._contacts = ContactRepository(uow.session, ctx)
+        self._guard = PermissionGuard(access, ctx)
+
+    # --- sibling link validation (existence in the context tenant only) ----
+
+    async def ensure_contact(self, contact_id: UUID) -> None:
+        await self._contacts.get_or_raise(contact_id)
+
+    async def ensure_company(self, company_id: UUID) -> None:
+        await self._companies.get_or_raise(company_id)
 
     # --- companies ---------------------------------------------------------
 
@@ -47,6 +69,7 @@ class ContactsService(Service):
         industry: str | None = None,
         notes: str | None = None,
     ) -> CompanyDTO:
+        await self._guard.require(perms.COMPANY_CREATE)
         company = Company(name=name, website=website, industry=industry, notes=notes)
         await self._companies.add(company)
         self.emit("crm.company.created", {"company_id": str(company.id)})
@@ -61,6 +84,7 @@ class ContactsService(Service):
         industry: str | None = None,
         notes: str | None = None,
     ) -> CompanyDTO:
+        await self._guard.require(perms.COMPANY_UPDATE)
         company = await self._companies.get_or_raise(company_id)
         if name is not None:
             company.name = name
@@ -75,9 +99,11 @@ class ContactsService(Service):
         return _company_dto(company)
 
     async def get_company(self, company_id: UUID) -> CompanyDTO:
+        await self._guard.require(perms.COMPANY_READ)
         return _company_dto(await self._companies.get_or_raise(company_id))
 
     async def list_companies(self, page: Page) -> PageResult[CompanyDTO]:
+        await self._guard.require(perms.COMPANY_READ)
         result = await self._companies.find_paged(order_by=[Company.name.asc()], page=page)
         return PageResult(
             items=[_company_dto(c) for c in result.items],
@@ -88,6 +114,7 @@ class ContactsService(Service):
 
     async def delete_company(self, company_id: UUID) -> None:
         """Delete a company; its contacts are un-assigned (FK ON DELETE SET NULL)."""
+        await self._guard.require(perms.COMPANY_DELETE)
         company = await self._companies.get_or_raise(company_id)
         await self._companies.delete(company)
         self.emit("crm.company.deleted", {"company_id": str(company_id)})
@@ -105,6 +132,7 @@ class ContactsService(Service):
         company_id: UUID | None = None,
         notes: str | None = None,
     ) -> ContactDTO:
+        await self._guard.require(perms.CONTACT_CREATE)
         if company_id is not None:
             await self._companies.get_or_raise(company_id)  # same-tenant existence (404 otherwise)
         contact = Contact(
@@ -132,6 +160,7 @@ class ContactsService(Service):
         company_id: UUID | None = None,
         notes: str | None = None,
     ) -> ContactDTO:
+        await self._guard.require(perms.CONTACT_UPDATE)
         contact = await self._contacts.get_or_raise(contact_id)
         if company_id is not None:
             await self._companies.get_or_raise(company_id)  # same-tenant existence (404 otherwise)
@@ -153,11 +182,13 @@ class ContactsService(Service):
         return _contact_dto(contact)
 
     async def get_contact(self, contact_id: UUID) -> ContactDTO:
+        await self._guard.require(perms.CONTACT_READ)
         return _contact_dto(await self._contacts.get_or_raise(contact_id))
 
     async def list_contacts(
         self, page: Page, *, company_id: UUID | None = None
     ) -> PageResult[ContactDTO]:
+        await self._guard.require(perms.CONTACT_READ)
         filters = [Contact.company_id == company_id] if company_id is not None else []
         result = await self._contacts.find_paged(
             *filters, order_by=[Contact.created_at.desc()], page=page
@@ -170,6 +201,7 @@ class ContactsService(Service):
         )
 
     async def delete_contact(self, contact_id: UUID) -> None:
+        await self._guard.require(perms.CONTACT_DELETE)
         contact = await self._contacts.get_or_raise(contact_id)
         await self._contacts.delete(contact)
         self.emit("crm.contact.deleted", {"contact_id": str(contact_id)})

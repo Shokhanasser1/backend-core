@@ -17,14 +17,20 @@ class PermissionResolver(Protocol):
 
 
 class AccessService:
+    """Request-scoped (built per ServiceBundle): the permission set is resolved
+    once per user and reused by the route check and the service-level guards."""
+
     def __init__(self, resolver: PermissionResolver) -> None:
         self._resolver = resolver
+        self._resolved: dict[UUID, frozenset[str]] = {}
 
     async def list_permissions(self, user_id: UUID) -> frozenset[str]:
-        return await self._resolver.get_permission_codes(user_id)
+        if user_id not in self._resolved:
+            self._resolved[user_id] = await self._resolver.get_permission_codes(user_id)
+        return self._resolved[user_id]
 
     async def has_permission(self, user_id: UUID, permission: str) -> bool:
-        return permission in await self._resolver.get_permission_codes(user_id)
+        return permission in await self.list_permissions(user_id)
 
     async def require(self, user_id: UUID, permission: str) -> None:
         """Service-layer enforcement (second line after the router)."""

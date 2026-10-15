@@ -1,12 +1,17 @@
 """ProductService — the public interface of commerce.products (interfaces §1.2).
 
-Sibling features (cart, orders) call ``get_sale_info`` to price a product without
-ever touching commerce_products directly. Staff manage the catalog through the
-RBAC router. Events are emitted post-commit by the Service base.
+Sibling features call ``get_sale_info`` (cart, orders: price a product) and
+``ensure_exists`` (product_images: validate a link) without ever touching
+commerce_products directly; those two are open to any caller in the tenant
+context, storefront buyers included. Staff catalog methods are RBAC-checked here
+as well as on the route (PermissionGuard). Events are emitted post-commit.
 """
 
 from uuid import UUID
 
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
+from modules.commerce.products import permissions as perms
 from modules.commerce.products.models import Product
 from modules.commerce.products.repository import ProductRepository
 from modules.commerce.products.schemas import ProductDTO
@@ -23,10 +28,18 @@ def _to_dto(product: Product) -> ProductDTO:
 
 
 class ProductService(Service):
-    def __init__(self, uow: UnitOfWork, bus: EventBus, ctx: TenantContext) -> None:
+    def __init__(
+        self,
+        uow: UnitOfWork,
+        bus: EventBus,
+        ctx: TenantContext,
+        *,
+        access: AccessService | None = None,
+    ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._repo = ProductRepository(uow.session, ctx)
+        self._guard = PermissionGuard(access, ctx)
 
     async def create(
         self,
@@ -37,6 +50,7 @@ class ProductService(Service):
         currency: str = "UZS",
         description: str | None = None,
     ) -> ProductDTO:
+        await self._guard.require(perms.PRODUCT_CREATE)
         Money(price_amount, currency)  # format + non-negative
         currency_registry.exponent(currency)  # currency must be known (else NotFound)
         if await self._repo.count(Product.sku == sku):
@@ -62,6 +76,7 @@ class ProductService(Service):
         price_amount: int | None = None,
         currency: str | None = None,
     ) -> ProductDTO:
+        await self._guard.require(perms.PRODUCT_UPDATE)
         product = await self._repo.get_or_raise(product_id)
         if product.status == "archived":
             raise InvariantViolationError("cannot update an archived product")
@@ -80,6 +95,7 @@ class ProductService(Service):
         return _to_dto(product)
 
     async def archive(self, product_id: UUID) -> ProductDTO:
+        await self._guard.require(perms.PRODUCT_UPDATE)
         product = await self._repo.get_or_raise(product_id)
         if product.status == "archived":
             return _to_dto(product)  # idempotent
@@ -89,9 +105,11 @@ class ProductService(Service):
         return _to_dto(product)
 
     async def get(self, product_id: UUID) -> ProductDTO:
+        await self._guard.require(perms.PRODUCT_READ)
         return _to_dto(await self._repo.get_or_raise(product_id))
 
     async def list(self, page: Page) -> PageResult[ProductDTO]:
+        await self._guard.require(perms.PRODUCT_READ)
         result = await self._repo.find_paged(order_by=[Product.created_at.desc()], page=page)
         return PageResult(
             items=[_to_dto(p) for p in result.items],
@@ -99,6 +117,11 @@ class ProductService(Service):
             limit=result.limit,
             offset=result.offset,
         )
+
+    async def ensure_exists(self, product_id: UUID) -> None:
+        """Public: link validation for sibling features — NotFound for a foreign or
+        missing product. Reveals nothing but existence in the context tenant."""
+        await self._repo.get_or_raise(product_id)
 
     async def get_sale_info(self, product_id: UUID) -> Money:
         """Public: price of an active product for sibling features (cart/orders).

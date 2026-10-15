@@ -49,7 +49,9 @@ async def mark_order_paid(event: EventEnvelope) -> None:
     service = OrderService(runtime.uow, runtime.bus, runtime.ctx)
     payment_raw = event.payload.get("payment_id")
     order = await service.mark_paid(
-        UUID(order_id), payment_id=UUID(str(payment_raw)) if payment_raw else None
+        UUID(order_id),
+        payment_id=UUID(str(payment_raw)) if payment_raw else None,
+        late=bool(event.payload.get("late")),
     )
     if order is None:
         return

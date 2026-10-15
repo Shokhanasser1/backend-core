@@ -8,7 +8,16 @@ to a sibling feature and are validated through ProductService, never joined
 
 import uuid
 
-from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, SmallInteger, Text, Uuid
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    SmallInteger,
+    Text,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.db import TenantScopedBase, TimestampMixin
@@ -24,8 +33,18 @@ class Cart(TimestampMixin, TenantScopedBase):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
 
     __table_args__ = (
-        CheckConstraint("status IN ('active', 'checked_out')", name="ck_commerce_carts_status"),
+        CheckConstraint(
+            "status IN ('active', 'checked_out', 'abandoned')", name="ck_commerce_carts_status"
+        ),
         Index("ix_commerce_carts_tenant_id_customer_user_id", "tenant_id", "customer_user_id"),
+        # One active cart per buyer per shop (migration commerce_cart0002).
+        Index(
+            "uq_commerce_carts_one_active_per_customer",
+            "tenant_id",
+            "customer_user_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
     )
 
 

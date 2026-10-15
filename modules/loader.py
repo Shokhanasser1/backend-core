@@ -63,7 +63,10 @@ def read_manifest(feature_dir: Path) -> FeatureManifest:
     toml_path = feature_dir / "feature.toml"
     if not toml_path.exists():
         raise FeatureError(f"no feature.toml in {feature_dir}")
-    data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+    try:
+        data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise FeatureError(f"malformed {toml_path}: {exc}") from exc
 
     module = feature_dir.parent.name
     feature = feature_dir.name

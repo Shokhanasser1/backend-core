@@ -66,8 +66,9 @@ def test_place_order_creates_pending_with_checkout(
     assert checkout["provider"] == "payme"
     assert checkout["checkout_url"].startswith("https://checkout.paycom.uz/")
 
-    orders = client.get("/api/commerce/orders", headers=_shop_headers(buyer, shop_id)).json()
-    assert len(orders) == 1
+    page = client.get("/api/commerce/orders", headers=_shop_headers(buyer, shop_id)).json()
+    assert page["total"] == 1
+    orders = page["items"]
     assert orders[0]["status"] == "pending"
     assert orders[0]["total_amount"] == 24000
 
@@ -92,7 +93,8 @@ def test_orders_are_isolated_per_buyer(commerce_payments_client: TestClient) -> 
         ).status_code
         == 404
     )
-    assert client.get("/api/commerce/orders", headers=_shop_headers(b2, shop_id)).json() == []
+    mine = client.get("/api/commerce/orders", headers=_shop_headers(b2, shop_id)).json()
+    assert mine["items"] == []
 
 
 def test_staff_admin_lists_orders_member_forbidden(

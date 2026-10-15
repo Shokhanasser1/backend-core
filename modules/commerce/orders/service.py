@@ -5,14 +5,22 @@ commerce.products) and takes payment through PaymentService (public interface of
 core/billing) — never touching those tables. The reliable subscriber
 (subscribers.py) marks the order paid on ``billing.payment.succeeded`` and sends a
 receipt through NotificationService. Buyer methods enforce ownership
-(``customer_user_id == ctx.actor.id``); staff read the whole tenant's orders.
+(``customer_user_id == ctx.actor.id``); staff read the whole tenant's orders —
+RBAC-checked here as well as on the route (PermissionGuard).
+
+An order canceled because its checkout EXPIRED is revived to paid when that same
+payment succeeds late (``late`` flag from billing): money has moved, there is no
+stock reservation to restore, and the lines are a price snapshot.
 """
 
 from collections.abc import Sequence
 from uuid import UUID
 
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
 from core.billing.service import PaymentService
 from modules.commerce.orders.models import Order, OrderItem
+from modules.commerce.orders.permissions import ORDER_READ
 from modules.commerce.orders.repository import OrderItemRepository, OrderRepository
 from modules.commerce.orders.schemas import OrderCheckoutDTO, OrderDTO, OrderItemDTO, OrderLineIn
 from modules.commerce.products import ProductService
@@ -39,6 +47,7 @@ class OrderService(Service):
         *,
         products: ProductService | None = None,
         payments: PaymentService | None = None,
+        access: AccessService | None = None,
     ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
@@ -46,6 +55,7 @@ class OrderService(Service):
         self._items = OrderItemRepository(uow.session, ctx)
         self._products = products  # required by place_order
         self._payments = payments  # required by place_order
+        self._guard = PermissionGuard(access, ctx)
 
     # ---------------------------------------------------------------- buyer
     async def place_order(self, lines: Sequence[OrderLineIn], provider: str) -> OrderCheckoutDTO:
@@ -116,40 +126,49 @@ class OrderService(Service):
         order = await self._orders.get_or_raise(order_id)
         if order.customer_user_id != _customer_id(self.ctx):
             raise NotFoundError(f"Order {order_id} not found")  # foreign == missing (V1)
-        return await self._to_dto(order)
+        return (await self._to_dtos([order]))[0]
 
-    async def list_own(self) -> Sequence[OrderDTO]:
-        orders = await self._orders.find(
-            Order.customer_user_id == _customer_id(self.ctx), order_by=[Order.created_at.desc()]
+    async def list_own(self, page: Page) -> PageResult[OrderDTO]:
+        result = await self._orders.find_paged(
+            Order.customer_user_id == _customer_id(self.ctx),
+            order_by=[Order.created_at.desc()],
+            page=page,
         )
-        return [await self._to_dto(order) for order in orders]
+        return await self._page(result)
 
     # ---------------------------------------------------------------- staff
     async def list_all(self, page: Page) -> PageResult[OrderDTO]:
+        await self._guard.require(ORDER_READ)
         result = await self._orders.find_paged(order_by=[Order.created_at.desc()], page=page)
-        return PageResult(
-            items=[await self._to_dto(order) for order in result.items],
-            total=result.total,
-            limit=result.limit,
-            offset=result.offset,
-        )
+        return await self._page(result)
 
     # ------------------------------------------------- subscriber-driven
-    async def mark_paid(self, order_id: UUID, *, payment_id: UUID | None) -> Order | None:
-        """Idempotent: returns None for a foreign/missing order, the order otherwise.
+    async def mark_paid(
+        self, order_id: UUID, *, payment_id: UUID | None, late: bool = False
+    ) -> Order | None:
+        """Idempotent: returns None for a foreign/missing order (or a canceled one
+        that this payment cannot revive), the order otherwise. A late success of
+        the order's OWN payment revives an order canceled by checkout expiry.
         Emits ``commerce.order.paid`` on the transition to paid."""
         order = await self._orders.get(order_id)
-        if order is None or order.status == "canceled":
+        if order is None:
             return None
         if order.status == "paid":
             return order  # already paid — idempotent
+        revived = order.status == "canceled"
+        if revived and not (late and payment_id is not None and order.payment_id == payment_id):
+            return None
         order.status = "paid"
         if payment_id is not None:
             order.payment_id = payment_id
         await self._session.flush()
         self.emit(
             "commerce.order.paid",
-            {"order_id": str(order.id), "payment_id": str(payment_id) if payment_id else None},
+            {
+                "order_id": str(order.id),
+                "payment_id": str(payment_id) if payment_id else None,
+                "late": revived,
+            },
         )
         return order
 
@@ -162,23 +181,37 @@ class OrderService(Service):
         self.emit("commerce.order.canceled", {"order_id": str(order.id), "reason": reason})
 
     # ---------------------------------------------------------------- shared
-    async def _to_dto(self, order: Order) -> OrderDTO:
-        items = await self._items.find(
-            OrderItem.order_id == order.id, order_by=[OrderItem.created_at]
+    async def _page(self, result: PageResult[Order]) -> PageResult[OrderDTO]:
+        return PageResult(
+            items=await self._to_dtos(result.items),
+            total=result.total,
+            limit=result.limit,
+            offset=result.offset,
         )
-        return OrderDTO(
-            id=order.id,
-            status=order.status,
-            total_amount=order.total_amount,
-            currency=order.currency,
-            payment_id=order.payment_id,
-            items=[
-                OrderItemDTO(
-                    product_id=item.product_id,
-                    quantity=item.quantity,
-                    unit_price_amount=item.unit_price_amount,
-                    currency=item.currency,
+
+    async def _to_dtos(self, orders: Sequence[Order]) -> list[OrderDTO]:
+        """All the orders' lines in ONE query (no per-order round trip)."""
+        lines: dict[UUID, list[OrderItemDTO]] = {order.id: [] for order in orders}
+        if lines:
+            for item in await self._items.find(
+                OrderItem.order_id.in_(list(lines)), order_by=[OrderItem.created_at]
+            ):
+                lines[item.order_id].append(
+                    OrderItemDTO(
+                        product_id=item.product_id,
+                        quantity=item.quantity,
+                        unit_price_amount=item.unit_price_amount,
+                        currency=item.currency,
+                    )
                 )
-                for item in items
-            ],
-        )
+        return [
+            OrderDTO(
+                id=order.id,
+                status=order.status,
+                total_amount=order.total_amount,
+                currency=order.currency,
+                payment_id=order.payment_id,
+                items=lines[order.id],
+            )
+            for order in orders
+        ]

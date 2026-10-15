@@ -5,7 +5,8 @@
 Изображения товаров: персонал тенанта загружает картинку, она сохраняется через
 `core/files` (с проверкой magic bytes) и привязывается к товару. При загрузке
 синхронно генерится уменьшенное превью (тоже отдельный файл в `core/files`,
-`thumbnail_file_id`). Товар проверяется через публичный `ProductService`, файл —
+`thumbnail_file_id`). Товар проверяется через публичный `ProductService.ensure_exists`,
+файл —
 через `FileService`; ни таблицу `commerce_products`, ни `files` фича не читает.
 Опциональная фича — подключается только если проекту нужны картинки.
 
@@ -18,7 +19,7 @@
 - **DTO:** `ProductImageDTO` (`id`, `product_id`, `file_id`, `thumbnail_file_id`,
   `position`, `alt_text`).
 - **Права:** `commerce.product_image:read` (owner/admin/member),
-  `commerce.product_image:manage` (owner/admin).
+  `commerce.product_image:manage` (owner/admin) — проверяются и в сервисе.
 - **События:** `commerce.product_image.added|removed` (payload: `image_id`,
   `product_id`, `file_id`; у `added` — ещё `thumbnail_file_id`).
 - **Роуты** (`/api/commerce/product-images`, staff, RBAC): `POST` (multipart:

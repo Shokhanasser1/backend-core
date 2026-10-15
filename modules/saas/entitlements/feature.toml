@@ -7,4 +7,5 @@ publishes_events = ["saas.entitlement.changed"]
 listens_events = [
     "billing.subscription.activated",
     "billing.subscription.canceled",
+    "billing.subscription.ended",
 ]

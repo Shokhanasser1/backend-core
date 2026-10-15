@@ -27,6 +27,10 @@ CRM-адресная книга: люди (**contacts**) и организаци
   `list_companies(page)` / `delete_company`.
 - Контакты: `create_contact` / `update_contact` / `get_contact` /
   `list_contacts(page, company_id=None)` / `delete_contact`.
+- Для соседей (проверка ссылок, без прав адресной книги): `ensure_contact(id)` /
+  `ensure_company(id)` — только существование в тенанте (иначе 404).
+
+Права проверяются и на роуте, и в сервисе (`PermissionGuard`).
 
 **PATCH-семантика** (общая по шаблону, как у `commerce.products`): в Update-методах
 поле со значением `None` означает «не менять». Очистка поля обратно в `null` в v1
@@ -57,6 +61,7 @@ CRM-адресная книга: люди (**contacts**) и организаци
 
 Публикует `crm.company.{created,updated,deleted}` и
 `crm.contact.{created,updated,deleted}` (payload — идентификатор). Ничего не слушает.
+`crm.deals` реагирует на удаления: снимает ссылку со сделок.
 
 ## Перенос в клиентский проект
 

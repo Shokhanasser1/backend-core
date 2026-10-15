@@ -16,6 +16,11 @@
 - **`AccessService`** (`access_service.py`) — читающая сторона RBAC:
   `list_permissions`, `has_permission`, `require` (проверка на уровне сервиса).
   Права резолвит через `PermissionResolver` (реализует `core/tenants`).
+- **`PermissionGuard`** (`guard.py`) — вторая линия RBAC внутри сервиса:
+  `PermissionGuard(access, ctx).require(code)`. Пользователь обязан иметь право в
+  тенанте контекста; внутренний актор (джоба, обработчик шины, интеграция)
+  проходит; пользовательский сервис, собранный без `AccessService`, отказывает
+  (fail closed). `AccessService` кеширует набор прав на запрос.
 - **`register_permissions(module, [...])`** — модули объявляют свои коды прав на
   старте; на нём же держится стартовая валидация роутов.
 - **Маркеры эндпоинтов** (`deps.py`): `require_permission(code)`,

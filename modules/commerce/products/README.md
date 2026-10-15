@@ -8,8 +8,10 @@
 
 ## Публичный интерфейс
 
-- **`ProductService`**: `create`, `update`, `archive`, `get`, `list`,
-  `get_sale_info(product_id) -> Money` (для cart/orders: цена активного товара).
+- **`ProductService`**: `create`, `update`, `archive`, `get`, `list` (права
+  проверяются и в сервисе — `PermissionGuard`), а для соседей без прав персонала:
+  `get_sale_info(product_id) -> Money` (cart/orders: цена активного товара) и
+  `ensure_exists(product_id)` (product_images: проверка ссылки).
 - **DTO:** `ProductDTO`, `CreateProductIn`, `UpdateProductIn`.
 - **Права:** `commerce.product:read` (owner/admin/member), `commerce.product:create`,
   `commerce.product:update` (owner/admin).

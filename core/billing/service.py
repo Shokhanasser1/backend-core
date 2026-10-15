@@ -259,7 +259,13 @@ class PaymentService(Service):
             await self._activate_subscription(payment)
         event_id = self.emit(
             "billing.payment.succeeded",
-            {**_payment_event_payload(payment), "paid_at": payment.paid_at.isoformat()},
+            {
+                **_payment_event_payload(payment),
+                "paid_at": payment.paid_at.isoformat(),
+                # True when the success came after our checkout expiry: a consumer
+                # that released its order/reservation on payment.expired decides.
+                "late": previous == "expired",
+            },
         )
         await self._audit("billing.payment.succeeded", payment, event_id)
 

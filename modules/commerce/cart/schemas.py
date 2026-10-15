@@ -30,3 +30,9 @@ class AddItemIn(BaseModel):
 
     product_id: UUID
     quantity: int = Field(default=1, ge=1, le=1000)
+
+
+class CheckoutIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(min_length=1, max_length=32)

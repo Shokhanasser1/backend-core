@@ -17,17 +17,26 @@
 
 - `is_enabled(flag_key) -> bool` — включён ли флаг активного плана (нет → `False`).
 - `get_limit(limit_key) -> int | None` — числовой лимит (`None` = безлимит/не задан).
-- `require_within_limit(limit_key, current_count)` — гард для соседей: бросает
-  `ConflictError` (409), если создание ещё одного объекта превысит лимит.
-  `current_count` — число ДО нового объекта. No-op, если лимит не задан.
+- `require_within_limit(limit_key, count)` — гард для соседей: бросает
+  `ConflictError` (409), если создание ещё одного объекта превысит лимит. `count` —
+  async-функция, возвращающая число ДО нового объекта; она вызывается под
+  advisory-lock на (тенант, лимит), который держится до конца транзакции, — объект
+  создаётся в ТОЙ ЖЕ транзакции, и два параллельных запроса не проходят оба на N-1.
+  No-op, если лимит не задан.
 - `snapshot() -> EntitlementsDTO` — все флаги/лимиты активного плана (для `GET /me`).
 - `effective_plan_code() -> str | None` — активный `plan_code` (учёт отмены).
 
 Пример enforcement в соседней фиче (без чтения таблиц saas):
 
+Связка — библиотечная: ни одна фича шаблона не зависит от saas; клиентский проект
+подключает лимит там, где он нужен:
+
 ```python
-# modules/commerce/products/service.py (гипотетически)
-await entitlements.require_within_limit("commerce.product", await self._repo.count())
+async def count() -> int:
+    return await products_repo.count()
+
+await entitlements.require_within_limit("commerce.product", count)
+# ...создать товар в этой же транзакции...
 ```
 
 ## Права
@@ -42,7 +51,10 @@ await entitlements.require_within_limit("commerce.product", await self._repo.cou
 - **Слушает** (reliable): `billing.subscription.activated`
   (`{subscription_id, plan_code, current_period_end}`) → ставит активный план;
   `billing.subscription.canceled` (`{subscription_id, plan_code}`) → помечает
-  отмену (покрытие держится до конца периода).
+  отмену (покрытие держится до конца периода);
+  `billing.subscription.ended` (`{subscription_id, plan_code, status}`) → платный
+  период закончился: покрытие этого плана снимается сразу (если активная строка
+  уже на другом плане — например, free-откат пришёл раньше, — она не трогается).
 
 ## Таблицы
 
@@ -55,7 +67,8 @@ await entitlements.require_within_limit("commerce.product", await self._repo.cou
 
 ## Дефолты (осознанно — это шаблон)
 
-- Нет активного плана (нет подписки / отменённая после конца периода) →
+- Нет активного плана (нет подписки / отменённая после конца периода или без
+  известного конца периода / платная, о конце которой сообщил billing) →
   «несконфигурированное» состояние: флаги `False`, лимиты `None` (безлимит).
 - Флаг вне сетки → `False`; лимит вне сетки → `None`. Enforcement срабатывает
   только там, где лимит **явно** задан, — включение фичи не блокирует тенанта

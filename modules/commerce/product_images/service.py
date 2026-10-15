@@ -1,7 +1,8 @@
 """ProductImageService — attach / list / serve / detach images for a product.
 
-Staff-managed (RBAC). The product is validated through ``ProductService`` and the
-bytes go through ``FileService`` (both public interfaces of their components);
+Staff-managed (RBAC — on the route and again here, PermissionGuard). The product
+is validated through ``ProductService.ensure_exists`` and the bytes go through
+``FileService`` (both public interfaces of their components);
 this feature never reads commerce_products or the files table directly. Events fire
 post-commit.
 """
@@ -10,7 +11,10 @@ from collections.abc import Sequence
 from typing import Literal
 from uuid import UUID
 
+from core.auth.access_service import AccessService
+from core.auth.guard import PermissionGuard
 from core.files import FileDTO, FileService
+from modules.commerce.product_images import permissions as perms
 from modules.commerce.product_images.models import ProductImage
 from modules.commerce.product_images.repository import ProductImageRepository
 from modules.commerce.product_images.schemas import ProductImageDTO
@@ -33,12 +37,14 @@ class ProductImageService(Service):
         *,
         products: ProductService,
         files: FileService,
+        access: AccessService | None = None,
     ) -> None:
         super().__init__(uow, bus, ctx)
         self._session = uow.session
         self._repo = ProductImageRepository(uow.session, ctx)
         self._products = products
         self._files = files
+        self._guard = PermissionGuard(access, ctx)
 
     @property
     def max_upload_bytes(self) -> int:
@@ -54,9 +60,10 @@ class ProductImageService(Service):
         alt_text: str | None = None,
         position: int = 0,
     ) -> ProductImageDTO:
+        await self._guard.require(perms.PRODUCT_IMAGE_MANAGE)
         # Validate the product via the sibling feature's public interface (NotFound
         # for a foreign/missing product) BEFORE storing any bytes.
-        await self._products.get(product_id)
+        await self._products.ensure_exists(product_id)
         stored = await self._files.upload(
             filename=filename, declared_content_type=declared_content_type, data=data
         )
@@ -83,6 +90,7 @@ class ProductImageService(Service):
         return _to_dto(image)
 
     async def list_for_product(self, product_id: UUID) -> Sequence[ProductImageDTO]:
+        await self._guard.require(perms.PRODUCT_IMAGE_READ)
         images = await self._repo.find(
             ProductImage.product_id == product_id,
             order_by=[ProductImage.position, ProductImage.created_at],
@@ -95,6 +103,7 @@ class ProductImageService(Service):
         """The image bytes for an owned image (404 for a foreign/missing one). The
         ``thumb`` variant serves the generated thumbnail, falling back to the
         original if none was recorded."""
+        await self._guard.require(perms.PRODUCT_IMAGE_READ)
         image = await self._repo.get_or_raise(image_id)
         file_id = image.file_id
         if variant == "thumb" and image.thumbnail_file_id is not None:
@@ -102,6 +111,7 @@ class ProductImageService(Service):
         return await self._files.open(file_id)
 
     async def remove(self, image_id: UUID) -> None:
+        await self._guard.require(perms.PRODUCT_IMAGE_MANAGE)
         image = await self._repo.get_or_raise(image_id)
         product_id, file_id = image.product_id, image.file_id
         thumbnail_file_id = image.thumbnail_file_id

@@ -2,9 +2,13 @@
 
 Reads the source repo's feature manifests, resolves the transitive
 ``requires_features`` closure, and copies each feature folder to
-``<target>/modules/<module>/<feature>``. Refuses to overwrite unless ``--force``.
-Prints the chain and the two remaining manual steps (enable the module, run
-migrations) — the anatomy promise that a feature transfers by copying its folder.
+``<target>/modules/<module>/<feature>`` (plus the module's ``__init__.py`` if the
+target lacks it). Refuses to overwrite the requested feature unless ``--force``;
+an installed dependency is never overwritten. Refuses a target that IS the source
+project and a target missing a core module the chain requires — both checked
+before anything is copied. Prints the chain and the two remaining manual steps
+(enable the module, run migrations) — the anatomy promise that a feature transfers
+by copying its folder.
 
     python -m tools.add_feature commerce.orders /path/to/target-project
     python -m tools.add_feature commerce.cart /path/to/target-project --force
@@ -64,27 +68,58 @@ def add_feature(
     feature names actually copied, in install order.
 
     A dependency already present in the target is treated as satisfied and skipped
-    (so adding features incrementally — ``add cart`` after ``add orders``, both
-    needing products — does not error on the shared dependency). The explicitly
-    requested feature, in contrast, is not silently overwritten: it errors unless
-    ``force`` is set, so a client never loses local changes to the thing they asked
-    to (re)add."""
+    (so adding features incrementally — ``add cart`` after ``add orders`` — does
+    not error on the shared dependency), even with ``force``: a client's local
+    changes to an installed dependency are never wiped. The explicitly requested
+    feature is not silently overwritten either: it errors unless ``force``."""
+    if target_root.resolve() == source_root.resolve():
+        raise FeatureError("target is the source project itself; nothing to copy")
     manifests = discover_manifests(_module_names(source_root), project_root=source_root)
     chain = _resolve_chain(feature, manifests)
+    _require_core(target_root, [manifests[name] for name in chain])
+
     copied: list[str] = []
     for name in chain:
         manifest = manifests[name]
         dest = target_root / "modules" / manifest.module / manifest.feature
         if dest.exists():
-            if name == feature and not force:
-                raise FeatureError(f"{dest} already exists (use --force to overwrite)")
-            if name != feature and not force:
+            if name != feature:
                 continue  # a dependency already installed — satisfied, leave it be
+            if not force:
+                raise FeatureError(f"{dest} already exists (use --force to overwrite)")
             shutil.rmtree(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_package(source_root / "modules" / manifest.module, dest.parent)
         shutil.copytree(manifest.path, dest, ignore=_IGNORE)
         copied.append(name)
     return copied
+
+
+def _require_core(target_root: Path, chain: Sequence[FeatureManifest]) -> None:
+    """Every core module the chain requires must exist in the target, checked
+    BEFORE copying: a half-copied chain that cannot boot helps nobody."""
+    missing = sorted(
+        {
+            core
+            for manifest in chain
+            for core in manifest.requires_core
+            if not (target_root / "core" / core).is_dir()
+        }
+    )
+    if missing:
+        raise FeatureError(f"target project lacks required core module(s): {', '.join(missing)}")
+
+
+def _ensure_package(source_module: Path, target_module: Path) -> None:
+    """Create ``modules/`` and ``modules/<module>/`` as importable packages in the
+    target, copying the source's ``__init__.py`` files where absent."""
+    target_module.mkdir(parents=True, exist_ok=True)
+    for source_dir, target_dir in (
+        (source_module.parent, target_module.parent),
+        (source_module, target_module),
+    ):
+        init = source_dir / "__init__.py"
+        if init.exists() and not (target_dir / "__init__.py").exists():
+            shutil.copy2(init, target_dir / "__init__.py")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

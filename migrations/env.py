@@ -1,21 +1,21 @@
 """Alembic environment: async engine, URL from the environment only."""
 
 import asyncio
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-import core.audit.models
-import core.auth.models
-import core.billing.models
-import core.files.models
-import core.notifications.models
-import core.tenants.models  # noqa: F401  (register tenants models on the metadata)
 import shared.processed_events  # noqa: F401  (register service tables on the metadata)
 from app.config import Settings
+from migrations.discovery import register_models
 from shared.db import Base
+
+# Core AND feature models (scanned, not listed): the metadata must know every
+# table the migrations create, or autogenerate would propose dropping them.
+register_models(Path(__file__).resolve().parents[1])
 
 config = context.config
 target_metadata = Base.metadata

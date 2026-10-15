@@ -60,6 +60,8 @@ async def get_deal(deal_id: UUID, service: DealService = Depends(deal_service)) 
 async def update_deal(
     deal_id: UUID, body: UpdateDealIn, service: DealService = Depends(deal_service)
 ) -> DealDTO:
+    # An explicit JSON null clears a link; an absent field leaves it unchanged.
+    sent = body.model_fields_set
     return await service.update(
         deal_id,
         title=body.title,
@@ -69,6 +71,8 @@ async def update_deal(
         contact_id=body.contact_id,
         company_id=body.company_id,
         notes=body.notes,
+        clear_contact="contact_id" in sent and body.contact_id is None,
+        clear_company="company_id" in sent and body.company_id is None,
     )
 
 

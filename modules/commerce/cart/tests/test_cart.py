@@ -36,7 +36,8 @@ def _new_product(client: TestClient, owner: str, *, sku: str, price: int) -> str
     return cast("str", resp.json()["id"])
 
 
-def test_buyer_fills_cart_and_checks_out(commerce_client: TestClient) -> None:
+def test_buyer_fills_cart_and_checks_out(commerce_payments_client: TestClient) -> None:
+    commerce_client = commerce_payments_client  # checkout opens a payment
     _u, shop_id, owner = _owner_with_tenant(commerce_client, "sho@example.uz")
     pid = _new_product(commerce_client, owner, sku="P1", price=5000)
 
@@ -52,10 +53,12 @@ def test_buyer_fills_cart_and_checks_out(commerce_client: TestClient) -> None:
     assert cart["items"][0]["quantity"] == 3
 
     checked_out = commerce_client.post(
-        "/api/commerce/cart/checkout", headers=_shop_headers(buyer, shop_id)
+        "/api/commerce/cart/checkout",
+        headers=_shop_headers(buyer, shop_id),
+        json={"provider": "payme"},
     )
-    assert checked_out.status_code == 200
-    assert checked_out.json()["status"] == "checked_out"
+    assert checked_out.status_code == 201, checked_out.text
+    assert checked_out.json()["order_id"]  # the cart became an order with a checkout
 
 
 def test_remove_item_empties_cart(commerce_client: TestClient) -> None:

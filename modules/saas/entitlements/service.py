@@ -1,14 +1,24 @@
 """EntitlementService — the public interface of saas.entitlements (§1.2).
 
 Sibling features enforce their tariff limits through this service without ever
-reading the entitlement tables: e.g. ``commerce.products`` would call
-``require_within_limit("commerce.product", current_count)`` before creating a
-product. The subscribers (subscribers.py) keep the tenant's active plan in step
-with billing; this service resolves it against the plan grid.
+reading the entitlement tables — a library call, not a hard-wired dependency (a
+client project wires it where it needs a limit), e.g. before creating a product::
+
+    async def count() -> int:
+        return await products_repo.count()
+
+    await entitlements.require_within_limit("commerce.product", count)
+    ...create the product in the SAME transaction...
+
+The count is evaluated under a per-(tenant, limit) advisory lock held until the
+transaction ends, so two concurrent creations cannot both pass at N-1. The
+subscribers (subscribers.py) keep the tenant's active plan in step with billing;
+this service resolves it against the plan grid.
 
 Default policy (documented, deliberate — this is a reusable template):
 
-- No active plan (no subscription, or a canceled one past its period end) is the
+- No active plan (no subscription, a canceled one past its period end or with no
+  known period end, or a paid one billing reported as ended) is the
   "unconfigured" state → every flag reads disabled and every limit unlimited.
 - A flag not present in the grid reads disabled; a limit not present reads
   unlimited (None). Enforcement bites only where a limit is explicitly seeded, so
@@ -17,6 +27,7 @@ Default policy (documented, deliberate — this is a reusable template):
   (auto-subscribe) with explicit limits.
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -27,6 +38,7 @@ from modules.saas.entitlements.schemas import EntitlementsDTO
 from shared.context import TenantContext
 from shared.errors import ConflictError
 from shared.events import EventBus
+from shared.locks import advisory_xact_lock
 from shared.service import Service, UnitOfWork
 
 
@@ -42,15 +54,14 @@ class EntitlementService(Service):
         """The tenant's active plan_code, or None if none is in force.
 
         A canceled subscription still covers the tenant until its period end
-        (cancel-at-period-end semantics); only afterwards does coverage lapse.
+        (cancel-at-period-end semantics); only afterwards does coverage lapse. A
+        canceled one with no known period end is not covered (never "forever").
         """
         row = await self._current_row()
         if row is None:
             return None
-        if (
-            row.canceled
-            and row.current_period_end is not None
-            and datetime.now(UTC) >= row.current_period_end
+        if row.canceled and (
+            row.current_period_end is None or datetime.now(UTC) >= row.current_period_end
         ):
             return None
         return row.plan_code
@@ -71,13 +82,22 @@ class EntitlementService(Service):
         row = await self._grant(plan, limit_key, "limit")
         return row.int_value if row is not None else None
 
-    async def require_within_limit(self, limit_key: str, current_count: int) -> None:
+    async def require_within_limit(
+        self, limit_key: str, count: Callable[[], Awaitable[int]]
+    ) -> None:
         """Guard for sibling features: raise ConflictError (409) if creating one
-        more would exceed the plan's limit. ``current_count`` is the count BEFORE
-        the new object. No-op when the limit is unlimited/unset."""
+        more would exceed the plan's limit. ``count`` returns the number of objects
+        BEFORE the new one; it is awaited under a per-(tenant, limit) advisory lock
+        that is held until the caller's transaction ends — create the object in
+        that same transaction. No-op (no lock, no count) when the limit is
+        unlimited/unset."""
         limit = await self.get_limit(limit_key)
-        if limit is not None and current_count >= limit:
-            raise ConflictError(f"plan limit '{limit_key}' reached ({current_count}/{limit})")
+        if limit is None:
+            return
+        await advisory_xact_lock(self._session, f"saas.limit:{self.ctx.tenant_id}:{limit_key}")
+        current = await count()
+        if current >= limit:
+            raise ConflictError(f"plan limit '{limit_key}' reached ({current}/{limit})")
 
     async def snapshot(self) -> EntitlementsDTO:
         """All flags + limits of the active plan (for GET /me / a UI wizard)."""
@@ -126,6 +146,19 @@ class EntitlementService(Service):
         row.canceled = True
         await self._session.flush()
         self.emit("saas.entitlement.changed", {"plan_code": row.plan_code})
+
+    async def end_plan(self, plan_code: str, ended_at: datetime) -> None:
+        """The paid period of ``plan_code`` ended (billing.subscription.ended):
+        coverage lapses now. A row already moved to another plan (the free
+        fallback may be processed first) is left alone."""
+        row = await self._current_row()
+        if row is None or row.plan_code != plan_code:
+            return
+        row.canceled = True
+        if row.current_period_end is None or row.current_period_end > ended_at:
+            row.current_period_end = ended_at
+        await self._session.flush()
+        self.emit("saas.entitlement.changed", {"plan_code": plan_code})
 
     # --- internals ---
 

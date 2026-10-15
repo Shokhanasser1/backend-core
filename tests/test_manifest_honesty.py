@@ -88,3 +88,107 @@ def test_declared_tables_have_a_migration() -> None:
             assert (manifest.path / "migrations").is_dir(), (
                 f"{manifest.name} declares owns_tables but has no migrations/ folder"
             )
+
+
+def _production_files(feature_dir: Path) -> list[Path]:
+    return [
+        py
+        for py in feature_dir.rglob("*.py")
+        if "/tests/" not in py.as_posix() and "/migrations/" not in py.as_posix()
+    ]
+
+
+def _string_args(feature_dir: Path, *, attr: str) -> set[str]:
+    """First string-literal argument of every ``<x>.<attr>("...")`` call in the
+    feature's production code (``self.emit("a.b.c")``, ``bus.subscribe("a.b.c")``)."""
+    found: set[str] = set()
+    for py in _production_files(feature_dir):
+        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == attr
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                found.add(node.args[0].value)
+    return found
+
+
+def _model_tables(feature_dir: Path) -> set[str]:
+    tables: set[str] = set()
+    for py in _production_files(feature_dir):
+        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "__tablename__" for t in node.targets)
+                and isinstance(node.value, ast.Constant)
+            ):
+                tables.add(str(node.value.value))
+    return tables
+
+
+def _migration_created_tables(feature_dir: Path) -> set[str]:
+    tables: set[str] = set()
+    for py in (feature_dir / "migrations").glob("*.py"):
+        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "create_table"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+            ):
+                tables.add(str(node.args[0].value))
+    return tables
+
+
+def test_owns_tables_match_models_and_migrations() -> None:
+    problems: list[str] = []
+    for manifest in discover_manifests(_all_module_names()).values():
+        declared = set(manifest.owns_tables)
+        models = _model_tables(manifest.path)
+        created = _migration_created_tables(manifest.path) if declared else set()
+        if models != declared:
+            problems.append(f"{manifest.name}: models {sorted(models)} != owns {sorted(declared)}")
+        if created != declared:
+            problems.append(
+                f"{manifest.name}: migrations create {sorted(created)} != owns {sorted(declared)}"
+            )
+    assert not problems, "owns_tables dishonesty:\n- " + "\n- ".join(problems)
+
+
+def test_event_declarations_match_the_code() -> None:
+    problems: list[str] = []
+    for manifest in discover_manifests(_all_module_names()).values():
+        emitted = _string_args(manifest.path, attr="emit")
+        subscribed = _string_args(manifest.path, attr="subscribe")
+        if emitted != set(manifest.publishes_events):
+            problems.append(
+                f"{manifest.name}: emits {sorted(emitted)} "
+                f"!= publishes_events {sorted(manifest.publishes_events)}"
+            )
+        if subscribed != set(manifest.listens_events):
+            problems.append(
+                f"{manifest.name}: subscribes {sorted(subscribed)} "
+                f"!= listens_events {sorted(manifest.listens_events)}"
+            )
+    assert not problems, "event dishonesty:\n- " + "\n- ".join(problems)
+
+
+def test_features_import_only_declared_core_modules() -> None:
+    problems: list[str] = []
+    for manifest in discover_manifests(_all_module_names()).values():
+        imported = {
+            dotted.split(".")[1]
+            for dotted in _imports(manifest.path)
+            if dotted.startswith("core.") and len(dotted.split(".")) > 1
+        }
+        undeclared = imported - set(manifest.requires_core)
+        if undeclared:
+            problems.append(
+                f"{manifest.name} imports core {sorted(undeclared)} "
+                f"not in requires_core {sorted(manifest.requires_core)}"
+            )
+    assert not problems, "requires_core dishonesty:\n- " + "\n- ".join(problems)

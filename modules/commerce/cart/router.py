@@ -6,12 +6,13 @@ addressed by the X-Shop-Tenant header (storefront_bundle).
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 
 from core.auth.deps import authenticated_endpoint
 from modules.commerce.cart.deps import cart_service
-from modules.commerce.cart.schemas import AddItemIn, CartDTO
+from modules.commerce.cart.schemas import AddItemIn, CartDTO, CheckoutIn
 from modules.commerce.cart.service import CartService
+from modules.commerce.orders import OrderCheckoutDTO
 
 router = APIRouter(prefix="/api/commerce/cart", tags=["commerce.cart"])
 
@@ -33,6 +34,13 @@ async def remove_item(product_id: UUID, service: CartService = Depends(cart_serv
     return await service.remove_item(product_id)
 
 
-@router.post("/checkout", dependencies=[Depends(authenticated_endpoint(_STOREFRONT))])
-async def checkout(service: CartService = Depends(cart_service)) -> CartDTO:
-    return await service.checkout()
+@router.post(
+    "/checkout",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(authenticated_endpoint(_STOREFRONT))],
+)
+async def checkout(
+    body: CheckoutIn, service: CartService = Depends(cart_service)
+) -> OrderCheckoutDTO:
+    """Place an order from the cart (re-priced now) and return its payment checkout."""
+    return await service.checkout(body.provider)

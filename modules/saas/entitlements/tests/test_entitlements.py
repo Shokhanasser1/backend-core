@@ -127,12 +127,16 @@ async def _reads(user_url: str, tenant_id: UUID) -> dict[str, object]:
 
 async def _require(user_url: str, tenant_id: UUID, key: str, count: int) -> None:
     engine = create_async_engine(user_url)
+
+    async def current() -> int:
+        return count
+
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         ctx = _ctx(tenant_id)
         async with SqlAlchemyUnitOfWork(factory, context=ctx) as uow:
             service = EntitlementService(uow, bus, ctx)
-            await service.require_within_limit(key, count)
+            await service.require_within_limit(key, current)
     finally:
         await engine.dispose()
 

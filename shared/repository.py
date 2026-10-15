@@ -61,12 +61,17 @@ class Repository[M: TenantScopedBase]:
         *where: ColumnElement[bool],
         order_by: Sequence[ColumnExpressionArgument[Any]] | None = None,
         page: Page | None = None,
+        for_update: bool = False,
     ) -> Sequence[M]:
+        """``for_update`` row-locks the matches until the transaction ends (to
+        serialize a read-modify-write against concurrent requests)."""
         stmt = self._select().where(*where)
         if order_by is not None:
             stmt = stmt.order_by(*order_by)
         if page is not None:
             stmt = stmt.limit(page.limit).offset(page.offset)
+        if for_update:
+            stmt = stmt.with_for_update()
         result = await self._session.execute(stmt)
         return result.scalars().all()
 

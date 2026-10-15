@@ -2,8 +2,12 @@
 
 - ``order_service`` (storefront, buyer): built on the storefront bundle with
   ProductService + PaymentService (public interfaces of products / billing).
-- ``staff_order_service`` (admin): built on the authed bundle; needs neither
-  products nor payments (read-only staff view).
+- ``staff_order_service`` (admin): built on the authed bundle with the request's
+  AccessService (the service re-checks the permission); needs neither products
+  nor payments (read-only staff view).
+
+``order_service`` is also the public way for a sibling storefront feature
+(commerce.cart) to obtain an OrderService in the same request/transaction.
 """
 
 from fastapi import Depends, Request
@@ -32,4 +36,4 @@ async def order_service(
 async def staff_order_service(
     request: Request, bundle: ServiceBundle = Depends(authed_bundle)
 ) -> OrderService:
-    return OrderService(bundle.uow, request.app.state.bus, bundle.ctx)
+    return OrderService(bundle.uow, request.app.state.bus, bundle.ctx, access=bundle.access)
