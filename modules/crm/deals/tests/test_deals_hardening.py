@@ -19,7 +19,7 @@ from modules.crm.contacts import ContactsService
 from modules.crm.deals import DealService
 from modules.crm.deals.subscribers import on_company_deleted, on_contact_deleted
 from shared.context import Actor, TenantContext
-from shared.errors import PermissionDeniedError
+from shared.errors import NotFoundError, PermissionDeniedError
 from shared.events import EventBus, EventEnvelope, bus
 from shared.handler_runtime import HandlerRuntime, reset_handler_runtime, set_handler_runtime
 from shared.ids import new_uuid7
@@ -136,6 +136,36 @@ def test_patch_null_clears_a_link_absent_keeps_it(crm_deals_client: TestClient) 
     assert cleared.status_code == 200
     assert cleared.json()["contact_id"] is None
     assert cleared.json()["company_id"] == deal["company_id"]
+
+
+def test_ensure_deal_checks_existence_in_the_tenant(crm_deals_client: TestClient) -> None:
+    """The sibling interface (crm.activities link validation): existence only,
+    no deal permission needed — even an internal actor or a plain member."""
+    client = crm_deals_client
+    _u, tenant_id, owner = _owner_with_tenant(client, "ens@example.uz")
+    deal = _linked_deal(client, owner)
+    _u2, other_tenant, _o2 = _owner_with_tenant(client, "oth@example.uz")
+    app = cast("FastAPI", client.app)
+
+    async def ensure(tenant: str, deal_id: UUID) -> object:
+        engine = create_async_engine(app.state.settings.database_url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        ctx = TenantContext(
+            tenant_id=UUID(tenant), actor=Actor(kind="system", id="test"), request_id=None
+        )
+        try:
+            async with SqlAlchemyUnitOfWork(sessions, context=ctx) as uow:
+                contacts = ContactsService(uow, bus, ctx)
+                deals = DealService(uow, bus, ctx, contacts=contacts, stages=())
+                await deals.ensure_deal(deal_id)
+                return None
+        except NotFoundError as exc:
+            return exc
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(ensure(tenant_id, UUID(deal["id"]))) is None
+    assert isinstance(asyncio.run(ensure(other_tenant, UUID(deal["id"]))), NotFoundError)
 
 
 def test_member_cannot_delete_through_the_service(crm_deals_client: TestClient) -> None:

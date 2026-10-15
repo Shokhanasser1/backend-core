@@ -12,14 +12,15 @@ from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.notifications.models import NotificationOutbox
 from modules.commerce.orders.subscribers import cancel_order_on_failure, mark_order_paid
 from shared.context import Actor, TenantContext
-from shared.events import EventEnvelope, bus
+from shared.events import EventBus, EventEnvelope
 from shared.handler_runtime import HandlerRuntime, reset_handler_runtime, set_handler_runtime
 from shared.ids import new_uuid7
 from shared.service import SqlAlchemyUnitOfWork
@@ -124,7 +125,7 @@ def test_staff_admin_lists_orders_member_forbidden(
 
 def _run_subscriber(
     subscriber: object,
-    session_factory: async_sessionmaker[AsyncSession],
+    client: TestClient,
     shop_id: str,
     event_name: str,
     order_id: str,
@@ -151,20 +152,26 @@ def _run_subscriber(
     )
 
     async def run() -> None:
-        async with SqlAlchemyUnitOfWork(session_factory, context=ctx) as uow:
-            token = set_handler_runtime(HandlerRuntime(uow=uow, ctx=ctx, bus=bus))
-            try:
-                await subscriber(envelope)  # type: ignore[operator]
-            finally:
-                reset_handler_runtime(token)
+        # Own engine per run (a pooled connection must not outlive its event loop)
+        # and a private bus (post-commit events must not reach the app's arq pool,
+        # which lives on the TestClient's loop) — either leak made this flaky.
+        engine = create_async_engine(cast("FastAPI", client.app).state.settings.database_url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with SqlAlchemyUnitOfWork(sessions, context=ctx) as uow:
+                token = set_handler_runtime(HandlerRuntime(uow=uow, ctx=ctx, bus=EventBus()))
+                try:
+                    await subscriber(envelope)  # type: ignore[operator]
+                finally:
+                    reset_handler_runtime(token)
+        finally:
+            await engine.dispose()
 
     asyncio.run(run())
 
 
 def test_paid_subscriber_marks_order_and_queues_receipt(
     commerce_payments_client: TestClient,
-    session_factory: async_sessionmaker[AsyncSession],
-    maintenance_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     client = commerce_payments_client
     _u, shop_id, owner = _owner_with_tenant(client, "pay@example.uz")
@@ -177,29 +184,33 @@ def test_paid_subscriber_marks_order_and_queues_receipt(
     ).json()["order_id"]
 
     # Simulate billing.payment.succeeded reaching the reliable subscriber.
-    _run_subscriber(
-        mark_order_paid, session_factory, shop_id, "billing.payment.succeeded", order_id, 7000
-    )
+    _run_subscriber(mark_order_paid, client, shop_id, "billing.payment.succeeded", order_id, 7000)
 
     paid = client.get(f"/api/commerce/orders/{order_id}", headers=_shop_headers(buyer, shop_id))
     assert paid.json()["status"] == "paid"
 
     async def _count_receipts() -> int:
-        async with maintenance_session_factory() as session:
-            return (
-                await session.execute(
-                    select(func.count())
-                    .select_from(NotificationOutbox)
-                    .where(NotificationOutbox.template_key == "commerce.order_paid")
+        url = cast("FastAPI", client.app).state.settings.database_maintenance_url
+        engine = create_async_engine(url)  # own pool, disposed on this loop
+        try:
+            async with engine.connect() as conn:
+                return int(
+                    (
+                        await conn.execute(
+                            select(func.count())
+                            .select_from(NotificationOutbox)
+                            .where(NotificationOutbox.template_key == "commerce.order_paid")
+                        )
+                    ).scalar_one()
                 )
-            ).scalar_one()
+        finally:
+            await engine.dispose()
 
     assert asyncio.run(_count_receipts()) >= 1
 
 
 def test_failed_payment_cancels_order(
     commerce_payments_client: TestClient,
-    session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     client = commerce_payments_client
     _u, shop_id, owner = _owner_with_tenant(client, "fai@example.uz")
@@ -212,7 +223,7 @@ def test_failed_payment_cancels_order(
     ).json()["order_id"]
 
     _run_subscriber(
-        cancel_order_on_failure, session_factory, shop_id, "billing.payment.failed", order_id, 3000
+        cancel_order_on_failure, client, shop_id, "billing.payment.failed", order_id, 3000
     )
 
     got = client.get(f"/api/commerce/orders/{order_id}", headers=_shop_headers(buyer, shop_id))

@@ -5,13 +5,13 @@
 **ядро → модули → фичи** (ADR-0004). Это не приложение, а starter kit, из
 которого клонированием собираются клиентские проекты (ADR-0009).
 
-**Статус:** версия `0.14.0` (см. `CHANGELOG.md`). V1 готов (Фазы 0–6, теги
+**Статус:** версия `0.15.0` (см. `CHANGELOG.md`). V1 готов (Фазы 0–6, теги
 `v0.1.0`…`v0.6.0`); после него — бэклог v1.1/v2 (`v0.7.0`…`v0.13.0`) и полный
 аудит безопасности и логики (`v0.14.0`). Ядро — auth, tenants, billing
 (Payme/Click/Stripe), notifications (Telegram/Eskiz/SMTP), audit, admin-каркас,
 files (filesystem/S3, превью), i18n (ru/uz). Модули из фич поверх ядра:
 **commerce** (products, product_images, cart, orders), **saas** (entitlements,
-metering, onboarding), **crm** (contacts, deals) + механика конструктора: загрузчик
+metering, onboarding), **crm** (contacts, deals, activities) + механика конструктора: загрузчик
 фич (`feature.toml`, проверка `requires` на старте), `tools/add-feature`, тест
 честности манифестов. Дальше — «проверка боем»: первый клиентский проект из
 шаблона. Конвенции разработки — `CLAUDE.md`; README модулей —

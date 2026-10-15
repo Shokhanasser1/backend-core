@@ -165,6 +165,11 @@ class Settings(BaseSettings):
     # without an explicit stage lands on the first. Empty = deals unusable (create
     # raises), so a client enabling crm.deals must set this.
     crm_deal_stages: str = ""
+    # crm.activities types: comma-separated keys, in display order. Unlike the
+    # funnel, a sensible default exists, so the feature works out of the box; an
+    # explicitly empty value makes activities unusable (create raises 422). An
+    # activity without an explicit type gets the first one.
+    crm_activity_types: str = "call,meeting,task,email"
 
     @field_validator("password_reset_url", "invitation_accept_url")
     @classmethod
@@ -217,6 +222,10 @@ class Settings(BaseSettings):
     @property
     def crm_deal_stage_list(self) -> tuple[str, ...]:
         return _split_csv(self.crm_deal_stages)
+
+    @property
+    def crm_activity_type_list(self) -> tuple[str, ...]:
+        return _split_csv(self.crm_activity_types)
 
     @property
     def secret_encryption_key_list(self) -> tuple[str, ...]:

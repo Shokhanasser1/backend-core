@@ -12,10 +12,10 @@
 |------|-----------|----------|
 | `crm.contacts` | Адресная книга: люди (contacts) + организации (companies) | core `auth`, `tenants` |
 | `crm.deals` | Сделки + воронка по настраиваемым стадиям | feature `crm.contacts` |
+| `crm.activities` | Активности: звонки, встречи, задачи, письма — срок, ответственный, связи | features `crm.contacts`, `crm.deals` |
 
-Планируется (строится по команде владельца — не заготавливается заранее):
-`crm.tasks` (задачи/активности, requires contacts). Состав согласован, порядок:
-contacts → deals → tasks.
+Согласованный состав собран: contacts → deals → activities (в плане значилась как
+`crm.tasks`; владелец выбрал единую сущность «активность»).
 
 ## Рецепты сборки
 
@@ -23,6 +23,9 @@ contacts → deals → tasks.
   contact→company с `ON DELETE SET NULL` — см. `contacts/README.md`).
 - **Воронка продаж:** `deals` (стадии — конфигом `CRM_DEAL_STAGES`; суммы Money;
   связь с контактом/компанией через `ContactsService` — см. `deals/README.md`).
+- **Работа с клиентом:** `activities` (звонки/встречи/задачи с ответственным и
+  сроком, привязка к контакту/компании/сделке; типы — `CRM_ACTIVITY_TYPES` — см.
+  `activities/README.md`).
 
 Перенос в клиентский проект — `tools/add-feature`:
 
@@ -40,6 +43,9 @@ python -m tools.add_feature crm.contacts /path/to/target
 - `crm.deals` → `DealService`: CRUD сделок; стадии из `CRM_DEAL_STAGES`, суммы
   Money, связи валидируются через `ContactsService`. Публикует `crm.deal.*`
   (включая `crm.deal.stage_changed`).
+- `crm.activities` → `ActivityService`: активности с типом из `CRM_ACTIVITY_TYPES`,
+  сроком, ответственным (член тенанта) и связями; фильтры «мои/просроченные/на
+  сегодня». Публикует `crm.activity.*`; снимает ссылки при `crm.contact|company|deal.deleted`.
 
 ## Как добавить новую фичу
 

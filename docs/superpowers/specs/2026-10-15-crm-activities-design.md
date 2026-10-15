@@ -40,7 +40,8 @@
 
 ## Зависимости и границы
 
-- `feature.toml`: `requires_features = ["crm.deals"]` (транзитивно `crm.contacts`),
+- `feature.toml`: `requires_features = ["crm.contacts", "crm.deals"]` (обе
+  импортируются напрямую — тест честности манифестов требует явного объявления),
   `requires_core = ["auth", "tenants"]`.
 - Ссылки проверяются через публичные интерфейсы соседей — только существование в
   тенанте, без прав соседа: `ContactsService.ensure_contact/ensure_company` (есть),
@@ -53,14 +54,17 @@
 
 `ActivityService` (публичный интерфейс, реэкспорт в пакете):
 
-- `create(subject, type=None, notes=None, due_at=None, assignee_user_id=None, contact_id=None, company_id=None, deal_id=None)` —
-  `type=None` → первый тип из конфигурации; ответственный по умолчанию = актор.
+- `create(CreateActivityIn)` — вход объектом (поля `subject`, `type`, `notes`,
+  `due_at`, `assignee_user_id`, `contact_id`, `company_id`, `deal_id`; лимит ruff на
+  число аргументов): `type=None` → первый тип из конфигурации; ответственный по
+  умолчанию = актор.
 - `update(activity_id, ActivityChanges)` — объект изменений (как `DealChanges`):
   `None` = не менять; явный JSON `null` у `contact_id`/`company_id`/`deal_id`/`due_at`
   снимает значение. Смена ответственного → событие `crm.activity.assigned`.
 - `complete(activity_id)` / `reopen(activity_id)` — идемпотентны (повтор — без события).
 - `get(activity_id)`, `delete(activity_id)`.
-- `list(page, *, assignee_user_id=None, mine=False, status=None, overdue=False, due_today=False, type=None, deal_id=None, contact_id=None, company_id=None)` —
+- `list(page, ActivityQuery)` — фильтры объектом: `assignee_user_id`, `mine`,
+  `status`, `overdue`, `due_today`, `type`, `deal_id`, `contact_id`, `company_id`;
   `status ∈ {open, done}`; «просроченные» = открытые с `due_at < now`; «на сегодня» —
   `due_at` в текущих сутках UTC; сортировка: открытые по сроку, затем новые.
 - Сервисные методы проверяют права (`PermissionGuard`); снятие ссылок подписчиками

@@ -5,7 +5,26 @@
 ручной работы в клиентах, MAJOR — ломающие изменения публичных интерфейсов
 ядра или схемы БД). Security-фиксы помечаются `[SECURITY]`.
 
-## [Unreleased]
+## [0.15.0] — 2026-10-15 — crm.activities + права в сервисах ядра и saas
+
+> Третья фича модуля crm (в плане — `crm.tasks`; владелец выбрал единую сущность
+> «активность») и доводка DoD после аудита: проверка прав в сервисах ядра и saas.
+
+### Added
+
+- **Фича `crm.activities`** — звонки, встречи, задачи, письма одной сущностью:
+  тип из `CRM_ACTIVITY_TYPES` (дефолт `call,meeting,task,email`), `subject`/`notes`,
+  срок `due_at`, отметка `done_at`, ответственный (активный член тенанта, по
+  умолчанию создатель), связи с контактом/компанией/сделкой (`requires crm.contacts, crm.deals`).
+  `ActivityService`: `create` / `update` (`ActivityChanges`, явный `null` снимает
+  ссылку/срок) / `complete` / `reopen` (идемпотентны) / `get` / `list` (фильтры
+  «мои», статус, просроченные, на сегодня, тип, связи) / `delete`. Роуты
+  `/api/crm/activities` (+ `/complete`, `/reopen`). Права `crm.activity:*` (member —
+  без delete). События `crm.activity.{created,updated,deleted,completed,reopened,assigned}`;
+  подписка на `crm.contact|company|deal.deleted` снимает ссылки. Таблица
+  `crm_activities` (RLS, ветка `crm_activities`).
+- Публичные интерфейсы для соседей: `TenantDirectory.is_active_member`,
+  `DealService.ensure_deal`.
 
 ### Security
 
@@ -19,6 +38,8 @@
 
 ### Upgrade notes
 
+- Миграция `crm_activities0001` (`python -m migrations.cli upgrade heads`); новая
+  переменная `CRM_ACTIVITY_TYPES` (необязательна — есть дефолт).
 - Код клиента, вызывающий эти сервисы от имени пользователя (`Actor(kind="user")`)
   в обход роутов, должен передавать `access=` (`bundle.access`) — иначе 403;
   внутренние вызовы (джобы, подписчики шины) не затронуты.

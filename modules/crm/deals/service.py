@@ -137,6 +137,11 @@ class DealService(Service):
             )
         return _to_dto(deal)
 
+    async def ensure_deal(self, deal_id: UUID) -> None:
+        """Public: link validation for sibling features (crm.activities) — NotFound
+        for a foreign or missing deal; existence only, no deal permission needed."""
+        await self._repo.get_or_raise(deal_id)
+
     async def get(self, deal_id: UUID) -> DealDTO:
         await self._guard.require(perms.DEAL_READ)
         return _to_dto(await self._repo.get_or_raise(deal_id))

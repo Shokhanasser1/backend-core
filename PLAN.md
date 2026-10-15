@@ -43,7 +43,7 @@ crm, saas и другие — см. бэклог.
 | ✅ Превью/тумбнейлы к product_images | Pillow за портом `ThumbnailPort`, синхронно при attach, `?size=thumb` | продолжение v1.1 (тег `v0.7.1`) |
 | ✅ Stripe-адаптер | Третий PaymentProvider для зарубежных клиентов (сервер→сервер checkout, подписанные вебхуки) | v1.1 (тег `v0.8.0`) |
 | ✅ Модуль saas | ✅ `entitlements` (флаги+лимиты) · ✅ `metering` (usage) · ✅ `onboarding` (чек-лист) — начальный объём v2 закрыт | v2 |
-| Модуль crm (в работе) | ✅ `crm.contacts` (люди+компании) · ✅ `crm.deals` (сделки+воронка); далее `tasks` | v2 |
+| ✅ Модуль crm | ✅ `crm.contacts` (люди+компании) · ✅ `crm.deals` (сделки+воронка) · ✅ `crm.activities` (звонки/встречи/задачи; в плане — `tasks`) | v2 |
 | tg-bot-template | Sibling-шаблон: aiogram поверх API этого же ядра | отдельный репозиторий |
 | Идеи будущих модулей | booking (записи: клиники, салоны, курсы), delivery, loyalty | по спросу клиентов |
 | Фронтенд админки | Отдельный проект поверх admin-API | по спросу |
@@ -51,6 +51,27 @@ crm, saas и другие — см. бэклог.
 | Реестр проектов | Шаблон реестра клиентских проектов (версия шаблона, даты merge/deploy) + read-only скрипт сверки версий (`docs/UPDATE.md`) | к первому клиентскому проекту |
 
 ## Журнал
+
+- 2026-10-15 — **Модуль `crm`, этап 3 — фича `crm.activities` (в плане — `crm.tasks`)
+  построена, ждёт приёмки, НЕ закоммичена** (ветка `feature/crm-activities`).
+  Решения владельца (AskUserQuestion, дизайн —
+  `docs/superpowers/specs/2026-10-15-crm-activities-design.md`): единая сущность
+  «активность» (звонок/встреча/задача/email — и план, и история касаний); типы —
+  конфигом `CRM_ACTIVITY_TYPES` с дефолтом `call,meeting,task,email`; связи с
+  контактом, компанией и сделкой (`requires crm.contacts, crm.deals`); ответственный
+  — активный член тенанта (по умолчанию создатель, проверка через новый
+  `TenantDirectory.is_active_member`); напоминаний нет; имя `crm.activities`.
+  Таблица `crm_activities` (RLS, ветка `crm_activities`), `ActivityService`
+  (create/update с `ActivityChanges`/complete/reopen/get/list с фильтрами «мои»,
+  статус, просроченные, на сегодня, тип, связи/delete), роуты `/api/crm/activities`
+  (+ `/complete`, `/reopen`), права `crm.activity:*` (member без delete, guard и в
+  сервисе), события `crm.activity.{created,updated,deleted,completed,reopened,assigned}`,
+  подписчики снимают ссылки при удалении контакта/компании/сделки; новый
+  `DealService.ensure_deal`. Тест честности манифестов поймал недекларированный
+  прямой импорт `crm.contacts` — объявлен. Версия `0.15.0` (CHANGELOG вместе с правами
+  в сервисах ядра и saas); `docs/HANDOFF.md` актуализирован. Попутно устранена
+  нестабильность `test_orders.py` (хелпер подписчика брал фикстурный пул в чужом
+  event loop и публиковал в arq-пул приложения — падал в зависимости от порядка).
 
 - 2026-10-15 — **DoD-доводка: права в сервисах ядра и saas — ПРИНЯТО, закоммичено
   `c16430a`.** Правило CLAUDE.md «дублируй права в сервисе» после аудита

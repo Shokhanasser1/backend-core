@@ -1,0 +1,18 @@
+name = "crm.activities"
+description = "Активности: звонки, встречи, задачи, письма — срок, ответственный, связи с контактом/компанией/сделкой."
+requires_features = ["crm.contacts", "crm.deals"]
+requires_core = ["auth", "tenants"]
+owns_tables = ["crm_activities"]
+publishes_events = [
+    "crm.activity.created",
+    "crm.activity.updated",
+    "crm.activity.deleted",
+    "crm.activity.completed",
+    "crm.activity.reopened",
+    "crm.activity.assigned",
+]
+listens_events = [
+    "crm.contact.deleted",
+    "crm.company.deleted",
+    "crm.deal.deleted",
+]
