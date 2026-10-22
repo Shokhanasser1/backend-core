@@ -1,6 +1,6 @@
 [project]
 name = "backend-core"
-version = "0.16.0"
+version = "0.16.1"
 description = "Переиспользуемый шаблон-конструктор бэкенда: ядро → модули → фичи (рынок УЗ/СНГ)"
 license = "PolyForm-Noncommercial-1.0.0"
 readme = "README.md"

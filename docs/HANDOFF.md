@@ -19,7 +19,8 @@
   Решение владельца: source-available — репозиторий публичный, бесплатно только
   некоммерческое использование, коммерческое — по лицензии правообладателя. Версии
   до `v0.15.1` включительно остаются под MIT. Дизайн —
-  `docs/superpowers/specs/2026-10-22-legal-documents-design.md`.
+  `docs/superpowers/specs/2026-10-22-legal-documents-design.md`. Следом `v0.16.1`
+  `[SECURITY]`: `virtualenv` → 21.14.12 (свежая CVE dev-зависимости).
 - **Готово:** V1 (теги `v0.1.0`…`v0.6.1`) + бэклог v1.1 (`v0.7.0`/`v0.7.1`/`v0.8.0`)
   + saas `entitlements`/`metering`/`onboarding` (`v0.9.0`…`v0.11.0`) + crm
   `contacts`/`deals` (`v0.12.0`/`v0.13.0`) + аудит (`v0.14.0`) + crm `activities`
